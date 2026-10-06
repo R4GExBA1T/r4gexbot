@@ -34,31 +34,39 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
 
 
 def _build_numbered_wheel() -> Image.Image:
-    """Overlay numbers 0-36 onto the blank wheel in European order."""
-    wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_blank.png")).convert("RGB")
+    """Overlay numbers 0-36 onto the blank wheel in European order,
+    each rotated to follow the wheel like a real casino table."""
+    wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_blank.png")).convert("RGBA")
     W = wheel.width
     cx = cy = W / 2
-    d = ImageDraw.Draw(wheel)
-    # Number ring radius: pockets sit between the outer rim and the center cone.
     num_r = int(W * 0.345)
     font = _font(int(W * 0.052))
 
     for idx, num in enumerate(EUROPEAN_ORDER):
-        # 0 at top (-90°), clockwise.
-        ang = math.radians(-90 + idx * POCKET_DEG)
+        # 0 at top (-90°), clockwise. deg_cw = clockwise degrees from top.
+        deg_cw = idx * POCKET_DEG
+        ang = math.radians(-90 + deg_cw)
         nx = cx + num_r * math.cos(ang)
         ny = cy + num_r * math.sin(ang)
         txt = str(num)
-        tb = d.textbbox((0, 0), txt, font=font)
-        tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        # Slight radial orientation for authenticity: rotate text to face outward.
-        # PIL can't easily rotate text in place; draw upright (readable) instead.
-        # Soft dark outline for legibility on red/black/green.
-        x, y = nx - tw / 2 - tb[0], ny - th / 2 - tb[1]
-        for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            d.text((x + ox, y + oy), txt, font=font, fill=(0, 0, 0))
-        d.text((x, y), txt, font=font, fill=(255, 255, 255))
-    return wheel
+
+        # Render the number on its own tile, then rotate so its "up"
+        # points outward from the center (readable from outside the wheel).
+        tb = font.getbbox(txt)
+        tw, th = tb[2] - tb[0] + 8, tb[3] - tb[1] + 8
+        tile = Image.new("RGBA", (tw * 2, th * 2), (0, 0, 0, 0))
+        td = ImageDraw.Draw(tile)
+        tx, ty = tw / 2 - tb[0], th / 2 - tb[1]
+        for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1)]:
+            td.text((tx + ox, ty + oy), txt, font=font, fill=(0, 0, 0, 255))
+        td.text((tx, ty), txt, font=font, fill=(255, 255, 255, 255))
+        # Rotate: at top (deg_cw=0) the number is upright; rotate clockwise
+        # as we move around so the top of the digit points outward.
+        rotated = tile.rotate(-deg_cw, resample=Image.BICUBIC, expand=True)
+        wheel.alpha_composite(
+            rotated, (int(nx - rotated.width / 2), int(ny - rotated.height / 2))
+        )
+    return wheel.convert("RGB")
 
 
 def roulette_spin_gif(winner: int, frames: int = 24) -> io.BytesIO:
