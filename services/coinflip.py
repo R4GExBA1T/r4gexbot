@@ -30,6 +30,45 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
+def _draw_star(d: ImageDraw.Draw, cx: float, cy: float, r: float,
+               fill: tuple, outline: tuple):
+    """Draw a 5-pointed star."""
+    pts = []
+    for i in range(10):
+        ang = math.radians(-90 + i * 36)
+        rad = r if i % 2 == 0 else r * 0.42
+        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+    d.polygon(pts, fill=fill, outline=outline)
+
+
+def _draw_laurel(d: ImageDraw.Draw, cx: float, cy: float, radius: float,
+                 dark: tuple, light: tuple):
+    """Bold laurel branches framing the central emblem, like the reference."""
+    for side in (-1, 1):
+        for i in range(8):
+            t = i / 7  # 0 top -> 1 bottom
+            # Sweep down the side, curving inward at the bottom.
+            ang_deg = 58 - t * 96  # from upper-side to lower-center
+            a = math.radians(ang_deg)
+            # Elliptical path hugging inside the star ring.
+            ex = cx + side * radius * 0.58 * math.cos(a)
+            ey = cy - radius * 0.58 * math.sin(a)
+            leaf_len, leaf_w = 20 - t * 6, 10 - t * 2
+            # Draw leaf angled along the branch.
+            d.ellipse([ex - leaf_len / 2, ey - leaf_w / 2,
+                       ex + leaf_len / 2, ey + leaf_w / 2],
+                      fill=light, outline=dark, width=2)
+            # Inner vein line.
+            d.line([ex - leaf_len / 3, ey, ex + leaf_len / 3, ey],
+                   fill=dark, width=1)
+        # Berry cluster at the bottom where branches meet.
+        for j in range(3):
+            bx = cx + side * (10 - j * 8)
+            by = cy + radius * 0.52 - j * 4
+            d.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=light,
+                      outline=dark, width=1)
+
+
 def _make_coin_face(icon_path: str, label: str) -> Image.Image:
     """Build one face of a real gold coin: photo texture, struck relief."""
     S = COIN_R * 2
@@ -76,9 +115,18 @@ def _make_coin_face(icon_path: str, label: str) -> Image.Image:
     # Rim highlight (top-left catches light).
     d.arc([4, 4, S - 4, S - 4], start=180, end=270, fill=(255, 240, 200, 200), width=3)
 
-    # Item icon struck as relief: shadow below-right, highlight above-left.
+    # Vintage engraved style: ring of stars + laurel wreath (like the reference).
+    engrave_dark = (72, 50, 18, 255)
+    engrave_light = (248, 222, 150, 255)
+    for i in range(13):
+        a = math.radians(-90 + i * (360 / 13))
+        sx, sy = cx + (COIN_R - 26) * math.cos(a), cy + (COIN_R - 26) * math.sin(a)
+        _draw_star(d, sx, sy, 9, fill=engrave_light, outline=engrave_dark)
+    _draw_laurel(d, cx, cy, COIN_R, engrave_dark, engrave_light)
+
+    # Central emblem (facemask/kilt) large, like the "1" on the reference coin.
     icon = Image.open(icon_path).convert("RGBA")
-    icon_size = int(S * 0.56)
+    icon_size = int(S * 0.52)
     icon = icon.resize((icon_size, icon_size), Image.LANCZOS)
     ix, iy = int((S - icon_size) / 2), int((S - icon_size) / 2) - 10
     alpha_mask = icon.split()[3]
