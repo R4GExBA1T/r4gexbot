@@ -34,13 +34,13 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
 
 
 def _build_numbered_wheel() -> Image.Image:
-    """Overlay numbers 0-36 onto the blank wheel in European order,
+    """Overlay numbers 0-36 onto the perfect 37-pocket wheel in European order,
     each rotated to follow the wheel like a real casino table."""
-    wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_blank.png")).convert("RGBA")
+    wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_perfect.png")).convert("RGBA")
     W = wheel.width
     cx = cy = W / 2
-    num_r = int(W * 0.320)
-    font = _font(int(W * 0.036))
+    num_r = int(W * 0.320)  # center of the pocket ring
+    font = _font(int(W * 0.030))  # smaller, refined
 
     for idx, num in enumerate(EUROPEAN_ORDER):
         # 0 at top (-90°), clockwise. deg_cw = clockwise degrees from top.
