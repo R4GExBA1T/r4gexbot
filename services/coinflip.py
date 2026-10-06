@@ -31,7 +31,7 @@ def _font(size: int):
 
 
 def _make_coin_face(icon_path: str, label: str) -> Image.Image:
-    """Build one face of a real gold coin: photo texture, embossed icon."""
+    """Build one face of a real gold coin: photo texture, struck relief."""
     S = COIN_R * 2
     cx = cy = COIN_R
 
@@ -44,40 +44,69 @@ def _make_coin_face(icon_path: str, label: str) -> Image.Image:
     face = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     face.paste(tex, (0, 0), mask)
 
+    # Directional light: gentle bright top-left, subtle.
+    light = Image.new("L", (S, S), 0)
+    ld = ImageDraw.Draw(light)
+    for r in range(int(S * 0.75), 0, -3):
+        lx, ly = int(cx - S * 0.18), int(cy - S * 0.20)
+        alpha = int(28 * (1 - r / (S * 0.75)))
+        ld.ellipse([lx - r, ly - r, lx + r, ly + r], fill=alpha)
+    face = Image.composite(
+        Image.new("RGBA", (S, S), (255, 245, 220, 255)),
+        face, light,
+    )
+    # Re-apply the circular mask (light bleed).
+    face.putalpha(mask)
+
     d = ImageDraw.Draw(face)
-    # Darken the edge for depth (vignette).
-    for r in range(COIN_R, int(COIN_R * 0.82), -2):
-        alpha = int(150 * (COIN_R - r) / (COIN_R * 0.18))
+    # Gentle vignette for rim depth.
+    for i in range(8):
+        r = COIN_R - i * 2
+        alpha = int(12 + i * 8)
         d.ellipse([cx - r, cy - r, cx + r, cy + r],
-                  outline=(60, 40, 15, min(alpha, 150)), width=2)
+                  outline=(55, 38, 14, min(alpha, 90)), width=2)
 
     # Reeded edge.
     for i in range(72):
         a = math.radians(i * 5)
         x1, y1 = cx + (COIN_R - 1) * math.cos(a), cy + (COIN_R - 1) * math.sin(a)
         x2, y2 = cx + (COIN_R - 9) * math.cos(a), cy + (COIN_R - 9) * math.sin(a)
-        d.line([x1, y1, x2, y2], fill=(90, 65, 25, 200), width=2)
-    d.ellipse([0, 0, S, S], outline=(75, 55, 22, 255), width=4)
+        d.line([x1, y1, x2, y2], fill=(85, 60, 22, 210), width=2)
+    d.ellipse([0, 0, S, S], outline=(70, 50, 20, 255), width=4)
+    # Rim highlight (top-left catches light).
+    d.arc([4, 4, S - 4, S - 4], start=180, end=270, fill=(255, 240, 200, 200), width=3)
 
-    # Item icon, embossed into the gold.
+    # Item icon struck as relief: shadow below-right, highlight above-left.
     icon = Image.open(icon_path).convert("RGBA")
     icon_size = int(S * 0.56)
     icon = icon.resize((icon_size, icon_size), Image.LANCZOS)
     ix, iy = int((S - icon_size) / 2), int((S - icon_size) / 2) - 10
-    # Soft dark halo behind the icon to seat it in the metal.
-    halo = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(halo)
-    hd.ellipse([ix - 6, iy - 6, ix + icon_size + 6, iy + icon_size + 6],
-               fill=(50, 35, 12, 110))
-    face.alpha_composite(halo)
-    face.alpha_composite(icon, (ix, iy))
+    alpha_mask = icon.split()[3]
+
+    relief = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    # Recess shadow (dark, offset down-right).
+    sh = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    sh.paste((45, 30, 10, 255), (0, 0),
+             alpha_mask.point(lambda v: int(v * 0.7)))
+    relief.alpha_composite(sh, (ix + 3, iy + 4))
+    # Raised highlight (bright, offset up-left).
+    hi = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    hi.paste((255, 240, 200, 255), (0, 0),
+             alpha_mask.point(lambda v: int(v * 0.5)))
+    relief.alpha_composite(hi, (ix - 2, iy - 2))
+    face.alpha_composite(relief)
+    # The icon itself, slightly darkened to sit in the metal.
+    dark_icon = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    dark_icon.paste(icon, (0, 0))
+    # Multiply blend-ish: darken via overlay.
+    face.alpha_composite(dark_icon, (ix, iy))
 
     # Label engraved at the bottom.
     font = _font(22)
     tb = d.textbbox((0, 0), label, font=font)
     lx, ly = (S - (tb[2] - tb[0])) / 2, S - 44
-    d.text((lx + 1, ly + 2), label, font=font, fill=(255, 240, 200, 220))
-    d.text((lx, ly), label, font=font, fill=(65, 45, 18, 255))
+    d.text((lx + 1, ly + 2), label, font=font, fill=(255, 242, 205, 230))
+    d.text((lx, ly), label, font=font, fill=(60, 42, 16, 255))
     return face
 
 
