@@ -75,13 +75,13 @@ def roulette_spin_gif(winner: int, frames: int = 24) -> io.BytesIO:
     wheel = _build_numbered_wheel()
     W = wheel.width
 
-    # Winner's pocket angle (clockwise from top). Rotate the wheel so it
-    # ends at the top: final rotation = -winner_angle (+ small jitter
-    # inside the pocket so it doesn't look artificially perfect).
+    # Winner's pocket angle (clockwise from top). PIL rotate() is
+    # counter-clockwise-positive: rotate(winner_angle) moves the winner
+    # to the top. Add small jitter so it doesn't look artificially perfect.
     winner_idx = EUROPEAN_ORDER.index(winner)
     winner_angle = winner_idx * POCKET_DEG
     jitter = random.uniform(-POCKET_DEG * 0.25, POCKET_DEG * 0.25)
-    final_rot = -(winner_angle + jitter)
+    final_rot = winner_angle + jitter
     total_deg = 3 * 360 + final_rot  # 3 full spins, then land
 
     out_frames: list[Image.Image] = []
