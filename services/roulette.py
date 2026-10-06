@@ -39,7 +39,7 @@ def _build_numbered_wheel() -> Image.Image:
     wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_perfect.png")).convert("RGBA")
     W = wheel.width
     cx = cy = W / 2
-    num_r = int(W * 0.320)  # center of the pocket ring
+    num_r = int(W * 0.290)  # center of the wider pocket ring
     font = _font(int(W * 0.030))  # smaller, refined
 
     for idx, num in enumerate(EUROPEAN_ORDER):
