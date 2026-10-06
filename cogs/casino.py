@@ -15,6 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from services.coinflip import flip_coin_gif
+from services.roulette import roulette_spin_gif
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
@@ -318,7 +319,15 @@ class Casino(commands.Cog):
                     f"🎡 The ball lands on {color_emoji} **{spin}** ({color}).\n"
                     f"You lose **{bet}** Scrap."
                 )
-        await interaction.followup.send(msg)
+        try:
+            gif = await asyncio.to_thread(roulette_spin_gif, spin)
+        except Exception:
+            gif = None
+        if gif is None:
+            await interaction.followup.send(msg)
+        else:
+            file = discord.File(gif, filename="roulette.gif")
+            await interaction.followup.send(msg, file=file)
 
     # -- coinflip ---------------------------------------------------------
 
