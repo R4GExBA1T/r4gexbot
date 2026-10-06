@@ -56,6 +56,8 @@ await self.tree.sync(guild=guild)
 ```
 
 ## Architecture
+<!-- trigger railway redeploy -->
+
 
 ```
 ximmy-bot/
