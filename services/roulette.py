@@ -20,6 +20,10 @@ POCKET_DEG = 360.0 / 37
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
+    # Bundled font first (Railway may not have system fonts).
+    bundled = os.path.join(_ASSETS, "DejaVuSans-Bold.ttf")
+    if os.path.exists(bundled):
+        return ImageFont.truetype(bundled, size)
     for p in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
