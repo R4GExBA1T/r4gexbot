@@ -7,12 +7,14 @@ blackjack hand) stays in the discord.ui.View — economy state never does.
 
 from __future__ import annotations
 
+import asyncio
 import random
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.coinflip import flip_coin_gif
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
@@ -334,13 +336,22 @@ class Casino(commands.Cog):
             return
         econ = _economy(self.bot)
         result = random.choice(["heads", "tails"])
-        emoji = "🪙"
+        try:
+            gif = await asyncio.to_thread(flip_coin_gif, result)
+        except Exception:
+            gif = None
         if result == side:
             await econ.add_scrap(interaction.user.id, bet * 2)
-            msg = f"{emoji} It's **{result}**! You win **{bet}** Scrap."
+            msg = f"It's **{result}**! You win **{bet}** Scrap."
         else:
-            msg = f"{emoji} It's **{result}**. You lose **{bet}** Scrap."
-        await interaction.followup.send(msg)
+            msg = f"It's **{result}**. You lose **{bet}** Scrap."
+        if gif is None:
+            await interaction.followup.send(f"🪙 {msg}")
+            return
+        file = discord.File(gif, filename="coinflip.gif")
+        embed = discord.Embed(description=msg, color=RUST_COLOR)
+        embed.set_image(url="attachment://coinflip.gif")
+        await interaction.followup.send(file=file, embed=embed)
 
 
 async def setup(bot: commands.Bot):
