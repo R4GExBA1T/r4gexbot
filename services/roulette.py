@@ -40,7 +40,7 @@ def _build_numbered_wheel() -> Image.Image:
     W = wheel.width
     cx = cy = W / 2
     num_r = int(W * 0.345)
-    font = _font(int(W * 0.052))
+    font = _font(int(W * 0.044))
 
     for idx, num in enumerate(EUROPEAN_ORDER):
         # 0 at top (-90°), clockwise. deg_cw = clockwise degrees from top.
@@ -57,7 +57,8 @@ def _build_numbered_wheel() -> Image.Image:
         tile = Image.new("RGBA", (tw * 2, th * 2), (0, 0, 0, 0))
         td = ImageDraw.Draw(tile)
         tx, ty = tw / 2 - tb[0], th / 2 - tb[1]
-        for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, 1)]:
+        # Clean thin outline for crisp legibility.
+        for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             td.text((tx + ox, ty + oy), txt, font=font, fill=(0, 0, 0, 255))
         td.text((tx, ty), txt, font=font, fill=(255, 255, 255, 255))
         # Rotate: at top (deg_cw=0) the number is upright; rotate clockwise
