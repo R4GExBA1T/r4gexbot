@@ -39,8 +39,8 @@ def _build_numbered_wheel() -> Image.Image:
     wheel = Image.open(os.path.join(_ASSETS, "roulette_wheel_blank.png")).convert("RGBA")
     W = wheel.width
     cx = cy = W / 2
-    num_r = int(W * 0.345)
-    font = _font(int(W * 0.044))
+    num_r = int(W * 0.320)
+    font = _font(int(W * 0.036))
 
     for idx, num in enumerate(EUROPEAN_ORDER):
         # 0 at top (-90°), clockwise. deg_cw = clockwise degrees from top.
