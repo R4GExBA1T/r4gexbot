@@ -17,7 +17,7 @@ from services.economy import (
     EconomyError,
     EconomyService,
 )
-from services.wheel import DAILY_LABELS, VIP_LABELS, spin_wheel_gif
+from services.wheel import spin_wheel_gif
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
 VIP_ROLE_NAME = "VIP"
@@ -36,12 +36,11 @@ class Economy(commands.Cog):
         await interaction.followup.send(str(exc), ephemeral=True)
 
     async def _bandit_spin(self, interaction: discord.Interaction,
-                           result_embed: discord.Embed, tier: str, vip: bool = False):
-        """Bandit Camp wheel: renders a real spinning wheel GIF that eases out
-        and lands on the winning tier, then posts it with the result embed."""
-        labels = VIP_LABELS if vip else DAILY_LABELS
+                           result_embed: discord.Embed, win_amount: int):
+        """Bandit Camp wheel: spins the REAL wheel disc, stops, and stamps
+        the exact amount won in the hub."""
         try:
-            gif = await asyncio.to_thread(spin_wheel_gif, tier, labels)
+            gif = await asyncio.to_thread(spin_wheel_gif, win_amount)
         except Exception:
             gif = None
         if gif is None:
@@ -84,7 +83,7 @@ class Economy(commands.Cog):
             embed.add_field(name="Streak", value=f"{result.streak}-day 🔥", inline=True)
         embed.add_field(name="Balance", value=f"**{result.new_balance}** Scrap", inline=False)
         embed.set_footer(text=f"Spin again in 24h • {interaction.user.display_name}")
-        await self._bandit_spin(interaction, embed, result.tier)
+        await self._bandit_spin(interaction, embed, result.total)
 
     # -- VIP hourly spin --------------------------------------------------
 
@@ -117,7 +116,7 @@ class Economy(commands.Cog):
         embed.add_field(name="Won", value=f"**{result.total}** Scrap", inline=True)
         embed.add_field(name="Balance", value=f"**{result.new_balance}** Scrap", inline=True)
         embed.set_footer(text=f"Spin again in 1h • {interaction.user.display_name}")
-        await self._bandit_spin(interaction, embed, result.tier, vip=True)
+        await self._bandit_spin(interaction, embed, result.total)
 
     # -- weekly ----------------------------------------------------------
 
