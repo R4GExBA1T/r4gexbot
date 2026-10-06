@@ -7,8 +7,8 @@ import random
 from PIL import Image, ImageDraw, ImageFont
 
 _ASSETS = os.path.dirname(os.path.abspath(__file__))
-SIZE = 220
-BALL_R = 7
+SIZE = 320  # output GIF size (larger for readable numbers)
+BALL_R = 9
 
 # European roulette order, clockwise from 0 at the top.
 EUROPEAN_ORDER = [
@@ -36,8 +36,8 @@ def _build_numbered_wheel() -> Image.Image:
     cx = cy = W / 2
     d = ImageDraw.Draw(wheel)
     # Number ring radius: pockets sit between the outer rim and the center cone.
-    num_r = int(W * 0.335)
-    font = _font(int(W * 0.038))
+    num_r = int(W * 0.345)
+    font = _font(int(W * 0.052))
 
     for idx, num in enumerate(EUROPEAN_ORDER):
         # 0 at top (-90°), clockwise.
