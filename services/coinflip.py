@@ -31,31 +31,64 @@ def _font(size: int):
 
 
 def _make_coin_face(icon_path: str, label: str) -> Image.Image:
-    """Build one face of the coin: metallic disc + item icon + label."""
+    """Build one face of an old gold coin: aged metal, reeded edge, patina."""
+    import random
     S = COIN_R * 2
     face = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(face)
+    cx = cy = COIN_R
 
-    # Metallic gold disc with radial-ish shading (concentric circles).
-    for r in range(COIN_R, 0, -2):
-        shade = int(140 + 70 * (r / COIN_R))  # darker edge, brighter center
-        color = (min(shade + 40, 230), min(shade, 190), max(shade - 80, 60))
-        d.ellipse([COIN_R - r, COIN_R - r, COIN_R + r, COIN_R + r], fill=color)
-    # Rim.
-    d.ellipse([0, 0, S, S], outline=GOLD_DARK, width=8)
-    d.ellipse([8, 8, S - 8, S - 8], outline=(230, 200, 120), width=2)
+    # Aged gold: radial gradient, bright warm center -> dark bronze edge.
+    for r in range(COIN_R, 0, -1):
+        t = r / COIN_R  # 1 at edge, 0 at center
+        rr = int(232 - 90 * t)
+        gg = int(196 - 90 * t)
+        bb = int(120 - 70 * t)
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(rr, gg, bb))
 
-    # Item icon centered.
+    # Metal grain: subtle noise for a worn look.
+    rng = random.Random(7)
+    for _ in range(900):
+        a = rng.uniform(0, 6.283)
+        rad = rng.uniform(0, COIN_R * 0.95)
+        x, y = int(cx + rad * math.cos(a)), int(cy + rad * math.sin(a))
+        v = rng.randint(-14, 14)
+        d.point((x, y), fill=(180 + v, 150 + v, 95 + v))
+
+    # Patina: faint tarnish, very subtle.
+    for _ in range(8):
+        a = rng.uniform(0, 6.283)
+        rad = rng.uniform(COIN_R * 0.4, COIN_R * 0.85)
+        x, y = cx + rad * math.cos(a), cy + rad * math.sin(a)
+        pr = rng.randint(3, 8)
+        d.ellipse([x - pr, y - pr, x + pr, y + pr], fill=(150, 120, 70, 45))
+
+    # Reeded edge: fine ridges around the rim like a real coin.
+    for i in range(72):
+        a = math.radians(i * 5)
+        x1, y1 = cx + (COIN_R - 2) * math.cos(a), cy + (COIN_R - 2) * math.sin(a)
+        x2, y2 = cx + (COIN_R - 10) * math.cos(a), cy + (COIN_R - 10) * math.sin(a)
+        d.line([x1, y1, x2, y2], fill=(95, 70, 30), width=2)
+    d.ellipse([0, 0, S, S], outline=(80, 58, 25), width=5)
+    d.ellipse([10, 10, S - 10, S - 10], outline=(245, 220, 150), width=2)
+
+    # Item icon, embossed: dark drop shadow offset, then the icon.
     icon = Image.open(icon_path).convert("RGBA")
-    icon_size = int(S * 0.58)
+    icon_size = int(S * 0.56)
     icon = icon.resize((icon_size, icon_size), Image.LANCZOS)
-    face.alpha_composite(icon, (int((S - icon_size) / 2), int((S - icon_size) / 2) - 8))
+    ix, iy = int((S - icon_size) / 2), int((S - icon_size) / 2) - 10
+    shadow = Image.new("RGBA", icon.size, (0, 0, 0, 0))
+    shadow_mask = icon.split()[3].point(lambda v: int(v * 0.55))
+    shadow.paste((40, 28, 12), (3, 4), shadow_mask)
+    face.alpha_composite(shadow, (ix, iy))
+    face.alpha_composite(icon, (ix, iy))
 
-    # Label at the bottom.
+    # Label engraved at the bottom.
     font = _font(22)
     tb = d.textbbox((0, 0), label, font=font)
-    d.text(((S - (tb[2] - tb[0])) / 2, S - 42), label, font=font,
-           fill=(60, 40, 10))
+    lx, ly = (S - (tb[2] - tb[0])) / 2, S - 44
+    d.text((lx + 1, ly + 1), label, font=font, fill=(245, 225, 160))
+    d.text((lx, ly), label, font=font, fill=(70, 50, 20))
     return face
 
 
