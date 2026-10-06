@@ -31,64 +31,53 @@ def _font(size: int):
 
 
 def _make_coin_face(icon_path: str, label: str) -> Image.Image:
-    """Build one face of an old gold coin: aged metal, reeded edge, patina."""
-    import random
+    """Build one face of a real gold coin: photo texture, embossed icon."""
     S = COIN_R * 2
-    face = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(face)
     cx = cy = COIN_R
 
-    # Aged gold: radial gradient, bright warm center -> dark bronze edge.
-    for r in range(COIN_R, 0, -1):
-        t = r / COIN_R  # 1 at edge, 0 at center
-        rr = int(232 - 90 * t)
-        gg = int(196 - 90 * t)
-        bb = int(120 - 70 * t)
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(rr, gg, bb))
+    # Real brushed-gold photo texture, masked to the coin disc.
+    tex = Image.open(os.path.join(_ASSETS, "gold_texture.png")).convert("RGB")
+    tex = tex.resize((S, S), Image.LANCZOS)
+    mask = Image.new("L", (S, S), 0)
+    md = ImageDraw.Draw(mask)
+    md.ellipse([0, 0, S, S], fill=255)
+    face = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    face.paste(tex, (0, 0), mask)
 
-    # Metal grain: subtle noise for a worn look.
-    rng = random.Random(7)
-    for _ in range(900):
-        a = rng.uniform(0, 6.283)
-        rad = rng.uniform(0, COIN_R * 0.95)
-        x, y = int(cx + rad * math.cos(a)), int(cy + rad * math.sin(a))
-        v = rng.randint(-14, 14)
-        d.point((x, y), fill=(180 + v, 150 + v, 95 + v))
+    d = ImageDraw.Draw(face)
+    # Darken the edge for depth (vignette).
+    for r in range(COIN_R, int(COIN_R * 0.82), -2):
+        alpha = int(150 * (COIN_R - r) / (COIN_R * 0.18))
+        d.ellipse([cx - r, cy - r, cx + r, cy + r],
+                  outline=(60, 40, 15, min(alpha, 150)), width=2)
 
-    # Patina: faint tarnish, very subtle.
-    for _ in range(8):
-        a = rng.uniform(0, 6.283)
-        rad = rng.uniform(COIN_R * 0.4, COIN_R * 0.85)
-        x, y = cx + rad * math.cos(a), cy + rad * math.sin(a)
-        pr = rng.randint(3, 8)
-        d.ellipse([x - pr, y - pr, x + pr, y + pr], fill=(150, 120, 70, 45))
-
-    # Reeded edge: fine ridges around the rim like a real coin.
+    # Reeded edge.
     for i in range(72):
         a = math.radians(i * 5)
-        x1, y1 = cx + (COIN_R - 2) * math.cos(a), cy + (COIN_R - 2) * math.sin(a)
-        x2, y2 = cx + (COIN_R - 10) * math.cos(a), cy + (COIN_R - 10) * math.sin(a)
-        d.line([x1, y1, x2, y2], fill=(95, 70, 30), width=2)
-    d.ellipse([0, 0, S, S], outline=(80, 58, 25), width=5)
-    d.ellipse([10, 10, S - 10, S - 10], outline=(245, 220, 150), width=2)
+        x1, y1 = cx + (COIN_R - 1) * math.cos(a), cy + (COIN_R - 1) * math.sin(a)
+        x2, y2 = cx + (COIN_R - 9) * math.cos(a), cy + (COIN_R - 9) * math.sin(a)
+        d.line([x1, y1, x2, y2], fill=(90, 65, 25, 200), width=2)
+    d.ellipse([0, 0, S, S], outline=(75, 55, 22, 255), width=4)
 
-    # Item icon, embossed: dark drop shadow offset, then the icon.
+    # Item icon, embossed into the gold.
     icon = Image.open(icon_path).convert("RGBA")
     icon_size = int(S * 0.56)
     icon = icon.resize((icon_size, icon_size), Image.LANCZOS)
     ix, iy = int((S - icon_size) / 2), int((S - icon_size) / 2) - 10
-    shadow = Image.new("RGBA", icon.size, (0, 0, 0, 0))
-    shadow_mask = icon.split()[3].point(lambda v: int(v * 0.55))
-    shadow.paste((40, 28, 12), (3, 4), shadow_mask)
-    face.alpha_composite(shadow, (ix, iy))
+    # Soft dark halo behind the icon to seat it in the metal.
+    halo = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    hd.ellipse([ix - 6, iy - 6, ix + icon_size + 6, iy + icon_size + 6],
+               fill=(50, 35, 12, 110))
+    face.alpha_composite(halo)
     face.alpha_composite(icon, (ix, iy))
 
     # Label engraved at the bottom.
     font = _font(22)
     tb = d.textbbox((0, 0), label, font=font)
     lx, ly = (S - (tb[2] - tb[0])) / 2, S - 44
-    d.text((lx + 1, ly + 1), label, font=font, fill=(245, 225, 160))
-    d.text((lx, ly), label, font=font, fill=(70, 50, 20))
+    d.text((lx + 1, ly + 2), label, font=font, fill=(255, 240, 200, 220))
+    d.text((lx, ly), label, font=font, fill=(65, 45, 18, 255))
     return face
 
 
