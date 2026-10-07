@@ -70,11 +70,24 @@ def _build_numbered_wheel() -> Image.Image:
     return wheel.convert("RGB")
 
 
+def _load_ball() -> Image.Image:
+    """Load the photorealistic roulette ball, with transparency."""
+    path = os.path.join(_ASSETS, "roulette_ball.png")
+    if os.path.exists(path):
+        return Image.open(path).convert("RGBA")
+    return None
+
+
 def roulette_spin_gif(winner: int, frames: int = 24) -> io.BytesIO:
     """Spin the wheel; it decelerates and the ball settles on `winner`
     at the top. Plays once."""
     wheel = _build_numbered_wheel()
     W = wheel.width
+    ball_img = _load_ball()
+    # Ball display size relative to output.
+    ball_size = int(SIZE * 0.075)
+    if ball_img:
+        ball_img = ball_img.resize((ball_size, ball_size), Image.LANCZOS)
 
     # Winner's pocket angle (clockwise from top). PIL rotate() is
     # counter-clockwise-positive: rotate(winner_angle) moves the winner
@@ -106,12 +119,17 @@ def roulette_spin_gif(winner: int, frames: int = 24) -> io.BytesIO:
             br = track_r + 6 - int(st * 6)
         bx = cx + br * math.cos(ball_angle)
         by = cy + br * math.sin(ball_angle)
-        d.ellipse([bx - BALL_R - 1, by - BALL_R + 1, bx + BALL_R - 1, by + BALL_R + 1],
-                  fill=(0, 0, 0, 160))
-        d.ellipse([bx - BALL_R, by - BALL_R, bx + BALL_R, by + BALL_R],
-                  fill=(235, 235, 240))
-        d.ellipse([bx - BALL_R + 2, by - BALL_R + 1, bx - 1, by - 2],
-                  fill=(255, 255, 255))
+        if ball_img:
+            # Paste the photorealistic ball with its transparency.
+            small.paste(ball_img, (int(bx - ball_size / 2), int(by - ball_size / 2)), ball_img)
+        else:
+            # Fallback: simple drawn ball.
+            d.ellipse([bx - BALL_R - 1, by - BALL_R + 1, bx + BALL_R - 1, by + BALL_R + 1],
+                      fill=(0, 0, 0, 160))
+            d.ellipse([bx - BALL_R, by - BALL_R, bx + BALL_R, by + BALL_R],
+                      fill=(235, 235, 240))
+            d.ellipse([bx - BALL_R + 2, by - BALL_R + 1, bx - 1, by - 2],
+                      fill=(255, 255, 255))
         out_frames.append(small)
 
     out_frames.extend([out_frames[-1]] * 12)
