@@ -18,6 +18,8 @@ from services.coinflip import flip_coin_gif
 from services.roulette import roulette_spin_gif
 from services.slots import slots_spin_gif, SYMBOLS
 from services.blackjack import render_blackjack_table
+from services.crash import roll_crash_point, crash_animation_gif
+from services.mines import render_mines_board, mines_multiplier
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
@@ -395,6 +397,221 @@ class Casino(commands.Cog):
         embed = discord.Embed(description=msg, color=RUST_COLOR)
         embed.set_image(url="attachment://coinflip.gif")
         await interaction.followup.send(file=file, embed=embed)
+
+    # -- crash ------------------------------------------------------------
+
+    @app_commands.command(name="crash", description="Ride the multiplier — cash out before it crashes")
+    @app_commands.describe(bet="How much Scrap to bet", cashout="Auto cash-out multiplier (e.g. 2.0)")
+    async def crash(self, interaction: discord.Interaction, bet: int, cashout: float):
+        await interaction.response.defer()
+        if not await self._take_bet(interaction, bet):
+            return
+        if cashout < 1.01:
+            await interaction.followup.send(
+                "❌ Cash-out must be at least 1.01x.", ephemeral=True
+            )
+            # Refund since we already took the bet.
+            await _economy(self.bot).add_scrap(interaction.user.id, bet)
+            return
+        cashout = round(min(cashout, 100.0), 2)
+
+        point = roll_crash_point()
+        econ = _economy(self.bot)
+        if point >= cashout:
+            winnings = int(bet * cashout)
+            await econ.add_scrap(interaction.user.id, winnings)
+            msg = (
+                f"🚀 Cashed out at **{cashout:.2f}x**!\n"
+                f"You win **{winnings - bet}** Scrap (total **{winnings}**)."
+            )
+            color = 0x50FF8C
+        else:
+            msg = (
+                f"💥 **CRASHED at {point:.2f}x!**\n"
+                f"You lose **{bet}** Scrap."
+            )
+            color = 0xFF4646
+
+        try:
+            gif = await asyncio.to_thread(crash_animation_gif, point,
+                                          cashout if point >= cashout else None)
+        except Exception:
+            gif = None
+        embed = discord.Embed(title="🚀 CRASH", description=msg, color=color)
+        if gif is None:
+            await interaction.followup.send(embed=embed)
+        else:
+            file = discord.File(gif, filename="crash.gif")
+            embed.set_image(url="attachment://crash.gif")
+            await interaction.followup.send(file=file, embed=embed)
+
+    # -- mines ------------------------------------------------------------
+
+    @app_commands.command(name="mines", description="Reveal tiles, dodge the mines, cash out anytime")
+    @app_commands.describe(bet="How much Scrap to bet", mines="Number of mines (1-10)")
+    async def mines(self, interaction: discord.Interaction, bet: int, mines: int):
+        await interaction.response.defer()
+        if not await self._take_bet(interaction, bet):
+            return
+        if not 1 <= mines <= 10:
+            await interaction.followup.send(
+                "❌ Mines must be between 1 and 10.", ephemeral=True
+            )
+            await _economy(self.bot).add_scrap(interaction.user.id, bet)
+            return
+
+        mine_positions = set(random.sample(range(25), mines))
+        view = MinesView(self.bot, interaction.user.id, bet, mines,
+                         mine_positions)
+        try:
+            img = await asyncio.to_thread(render_mines_board, set(), set())
+        except Exception:
+            img = None
+        embed = discord.Embed(
+            title="💣 MINES",
+            description=f"**{mines}** mines hidden. Pick tiles to reveal Scrap!\n"
+                        f"Bet: **{bet}** Scrap",
+            color=RUST_COLOR,
+        )
+        if img is None:
+            await interaction.followup.send(embed=embed, view=view)
+        else:
+            file = discord.File(img, filename="mines.png")
+            embed.set_image(url="attachment://mines.png")
+            await interaction.followup.send(file=file, embed=embed, view=view)
+
+
+class MinesView(discord.ui.View):
+    """Interactive Mines board: pick tiles via select menu, cash out anytime."""
+
+    def __init__(self, bot: commands.Bot, user_id: int, bet: int, mines: int,
+                 mine_positions: set[int]):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.user_id = user_id
+        self.bet = bet
+        self.mine_positions = mine_positions
+        self.revealed: set[int] = set()
+        self.over = False
+
+    def _econ(self) -> EconomyService:
+        return _economy(self.bot)
+
+    def _mult(self) -> float:
+        return mines_multiplier(len(self.mine_positions), len(self.revealed))
+
+    async def _render(self) -> tuple[discord.Embed, discord.File | None]:
+        try:
+            img = await asyncio.to_thread(
+                render_mines_board, self.revealed, self.mine_positions,
+                self.over)
+        except Exception:
+            img = None
+        mult = self._mult()
+        potential = int(self.bet * mult)
+        embed = discord.Embed(
+            title="💣 MINES",
+            description=f"Revealed: **{len(self.revealed)}** | "
+                        f"Multiplier: **{mult:.2f}x**\n"
+                        f"Potential win: **{potential}** Scrap",
+            color=RUST_COLOR,
+        )
+        if img is None:
+            return embed, None
+        file = discord.File(img, filename="mines.png")
+        embed.set_image(url="attachment://mines.png")
+        return embed, file
+
+    @discord.ui.select(
+        placeholder="Pick a tile (1-25)...",
+        options=[discord.SelectOption(label=f"Tile {i+1}", value=str(i))
+                 for i in range(25)],
+    )
+    async def pick_tile(self, interaction: discord.Interaction,
+                        select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ This isn't your game!", ephemeral=True)
+            return
+        if self.over:
+            await interaction.response.send_message(
+                "❌ Game is over.", ephemeral=True)
+            return
+        idx = int(select.values[0])
+        if idx in self.revealed:
+            await interaction.response.send_message(
+                "❌ Tile already revealed.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        self.revealed.add(idx)
+
+        if idx in self.mine_positions:
+            # Boom.
+            self.over = True
+            for child in self.children:
+                child.disabled = True
+            embed, file = await self._render()
+            embed.title = "💥 BOOM!"
+            embed.description = (
+                f"You hit a mine!\nYou lose **{self.bet}** Scrap."
+            )
+            embed.color = 0xFF4646
+            if file:
+                await interaction.followup.send(embed=embed, file=file,
+                                                view=self)
+            else:
+                await interaction.followup.send(embed=embed, view=self)
+            self.stop()
+            return
+
+        # Safe — update the board.
+        mult = self._mult()
+        embed, file = await self._render()
+        if file:
+            await interaction.followup.send(
+                f"✅ Safe! Multiplier now **{mult:.2f}x**",
+                embed=embed, file=file, view=self, ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"✅ Safe! Multiplier now **{mult:.2f}x**",
+                embed=embed, view=self, ephemeral=True)
+
+    @discord.ui.button(label="💰 Cash Out", style=discord.ButtonStyle.success)
+    async def cash_out(self, interaction: discord.Interaction,
+                       button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ This isn't your game!", ephemeral=True)
+            return
+        if self.over:
+            await interaction.response.send_message(
+                "❌ Game is over.", ephemeral=True)
+            return
+        if not self.revealed:
+            await interaction.response.send_message(
+                "❌ Reveal at least one tile first!", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        self.over = True
+        for child in self.children:
+            child.disabled = True
+        mult = self._mult()
+        winnings = int(self.bet * mult)
+        await self._econ().add_scrap(self.user_id, winnings)
+        embed, file = await self._render()
+        embed.title = "💰 Cashed Out!"
+        embed.description = (
+            f"**{mult:.2f}x** multiplier!\n"
+            f"You win **{winnings - self.bet}** Scrap (total **{winnings}**)."
+        )
+        embed.color = 0x50FF8C
+        if file:
+            await interaction.followup.send(embed=embed, file=file, view=self)
+        else:
+            await interaction.followup.send(embed=embed, view=self)
+        self.stop()
 
 
 async def setup(bot: commands.Bot):
