@@ -57,20 +57,21 @@ class Ximmy(commands.Bot):
         await self.load_extension("cogs.economy")
         await self.load_extension("cogs.casino")
         await self.load_extension("cogs.clans")
-        # NOTE: Safe auto-sync ENABLED temporarily to register /clan.
-        # The 2026-10-07 wipe root cause is understood and guarded:
-        # tree.sync(guild=...) only uploads guild-bound commands, but cog
-        # commands register GLOBALLY, so we copy_global_to(guild) first
-        # and refuse to sync when the payload would be empty.
-        guild = discord.Object(id=1556869956388266037)  # R4GE 3X
-        self.tree.copy_global_to(guild=guild)
-        payload = list(self.tree.walk_commands(guild=guild))
-        if not payload:
-            print("Ximmy online — REFUSED guild sync: empty payload, skipping to avoid wipe.")
-        else:
-            synced = await self.tree.sync(guild=guild)
-            print(f"Ximmy online — synced {len(synced)} slash commands.")
-        # print(f"Ximmy online — auto-sync disabled, commands managed via API.")
+        # NOTE: Auto-sync disabled — commands are managed manually via API.
+        # The safe auto-sync (copy_global_to + empty-payload guard) works
+        # correctly and was used to register /clan on 2026-10-07. It can be
+        # re-enabled by uncommenting the block below.
+        #
+        # Safe auto-sync block (guarded against the 2026-10-07 wipe):
+        # guild = discord.Object(id=1556869956388266037)  # R4GE 3X
+        # self.tree.copy_global_to(guild=guild)
+        # payload = list(self.tree.walk_commands(guild=guild))
+        # if not payload:
+        #     print("Ximmy online — REFUSED guild sync: empty payload, skipping to avoid wipe.")
+        # else:
+        #     synced = await self.tree.sync(guild=guild)
+        #     print(f"Ximmy online — synced {len(synced)} slash commands.")
+        print(f"Ximmy online — auto-sync disabled, commands managed via API.")
 
     async def close(self) -> None:
         await self.economy.close()
