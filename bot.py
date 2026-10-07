@@ -58,7 +58,6 @@ class Ximmy(commands.Bot):
         await self.load_extension("cogs.casino")
         # Guild-specific sync for instant command updates.
         guild = discord.Object(id=1556869956388266037)  # R4GE 3X
-        self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
         print(f"Ximmy online — synced {len(synced)} slash commands.")
 
