@@ -11,8 +11,8 @@ SIZE = 280
 
 # Segment values in clockwise order from the top pointer, matching the
 # generated wheel images.
-DAILY_SEGMENTS = [1000, 250, 100, 50, 25, 10]
-VIP_SEGMENTS = [100, 300, 5, 10, 20, 50]
+DAILY_SEGMENTS = [1000, 10, 25, 50, 100, 250]
+VIP_SEGMENTS = [100, 300, 5, 50, 10, 20]
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
