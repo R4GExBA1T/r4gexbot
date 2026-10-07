@@ -20,6 +20,7 @@ from services.slots import slots_spin_gif, SYMBOLS
 from services.blackjack import render_blackjack_table
 from services.crash import roll_crash_point, crash_animation_gif
 from services.mines import render_mines_board, mines_multiplier
+from services.plinko import plinko_animation_gif, MULTIPLIERS
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
@@ -619,6 +620,53 @@ class MinesView(discord.ui.View):
         else:
             await interaction.followup.send(embed=embed, view=self)
         self.stop()
+
+    # -- plinko -----------------------------------------------------------
+
+    @app_commands.command(name="plinko", description="Drop the chrome ball down the pegs")
+    @app_commands.describe(bet="How much Scrap to bet",
+                           risk="Risk level — higher risk, bigger edge multipliers")
+    @app_commands.choices(risk=[
+        app_commands.Choice(name="🟢 Low", value="low"),
+        app_commands.Choice(name="🟡 Medium", value="medium"),
+        app_commands.Choice(name="🔴 High", value="high"),
+    ])
+    async def plinko(self, interaction: discord.Interaction, bet: int,
+                     risk: app_commands.Choice[str]):
+        await interaction.response.defer()
+        if not await self._take_bet(interaction, bet):
+            return
+
+        try:
+            gif, mult, _ = await asyncio.to_thread(
+                plinko_animation_gif, risk.value)
+        except Exception:
+            gif, mult = None, 0
+
+        econ = _economy(self.bot)
+        winnings = int(bet * mult)
+        if winnings > 0:
+            await econ.add_scrap(interaction.user.id, winnings)
+
+        risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}[risk.value]
+        if mult >= 1:
+            msg = (f"{risk_emoji} Ball lands on **{mult}x**!\n"
+                   f"You win **{winnings - bet}** Scrap (total **{winnings}**).")
+            color = 0x50FF8C
+        else:
+            msg = (f"{risk_emoji} Ball lands on **{mult}x**.\n"
+                   f"You lose **{bet - winnings}** Scrap.")
+            color = 0xFF4646
+
+        embed = discord.Embed(title="⚪ PLINKO", description=msg, color=color)
+        embed.add_field(name="Risk", value=risk.name, inline=True)
+        embed.add_field(name="Bet", value=f"{bet} Scrap", inline=True)
+        if gif is None:
+            await interaction.followup.send(embed=embed)
+        else:
+            file = discord.File(gif, filename="plinko.gif")
+            embed.set_image(url="attachment://plinko.gif")
+            await interaction.followup.send(file=file, embed=embed)
 
 
 async def setup(bot: commands.Bot):
