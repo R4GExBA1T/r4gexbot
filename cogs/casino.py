@@ -624,43 +624,53 @@ class MinesView(discord.ui.View):
     # -- plinko -----------------------------------------------------------
 
     @app_commands.command(name="plinko", description="Drop the chrome ball down the pegs")
-    @app_commands.describe(bet="How much Scrap to bet",
-                           risk="Risk level — higher risk, bigger edge multipliers")
+    @app_commands.describe(bet="How much Scrap to bet (per ball)",
+                           risk="Risk level — higher risk, bigger edge multipliers",
+                           balls="How many balls to drop (1-3)")
     @app_commands.choices(risk=[
         app_commands.Choice(name="🟢 Low", value="low"),
         app_commands.Choice(name="🟡 Medium", value="medium"),
         app_commands.Choice(name="🔴 High", value="high"),
     ])
     async def plinko(self, interaction: discord.Interaction, bet: int,
-                     risk: app_commands.Choice[str]):
+                     risk: app_commands.Choice[str], balls: int = 1):
         await interaction.response.defer()
-        if not await self._take_bet(interaction, bet):
+        if not 1 <= balls <= 3:
+            await interaction.followup.send(
+                "❌ Balls must be between 1 and 3.", ephemeral=True
+            )
+            return
+        total_bet = bet * balls
+        if not await self._take_bet(interaction, total_bet):
             return
 
         try:
-            gif, mult, _ = await asyncio.to_thread(
-                plinko_animation_gif, risk.value)
+            gif, mults = await asyncio.to_thread(
+                plinko_animation_gif, risk.value, balls)
         except Exception:
-            gif, mult = None, 0
+            gif, mults = None, []
 
         econ = _economy(self.bot)
-        winnings = int(bet * mult)
+        winnings = sum(int(bet * m) for m in mults)
         if winnings > 0:
             await econ.add_scrap(interaction.user.id, winnings)
 
         risk_emoji = {"low": "🟢", "medium": "🟡", "high": "🔴"}[risk.value]
-        if mult >= 1:
-            msg = (f"{risk_emoji} Ball lands on **{mult}x**!\n"
-                   f"You win **{winnings - bet}** Scrap (total **{winnings}**).")
+        mult_str = " + ".join(f"{m}x" for m in mults)
+        profit = winnings - total_bet
+        if profit >= 0:
+            msg = (f"{risk_emoji} Balls land on **{mult_str}**!\n"
+                   f"You win **{profit}** Scrap (total **{winnings}**).")
             color = 0x50FF8C
         else:
-            msg = (f"{risk_emoji} Ball lands on **{mult}x**.\n"
-                   f"You lose **{bet - winnings}** Scrap.")
+            msg = (f"{risk_emoji} Balls land on **{mult_str}**.\n"
+                   f"You lose **{-profit}** Scrap.")
             color = 0xFF4646
 
         embed = discord.Embed(title="⚪ PLINKO", description=msg, color=color)
         embed.add_field(name="Risk", value=risk.name, inline=True)
-        embed.add_field(name="Bet", value=f"{bet} Scrap", inline=True)
+        embed.add_field(name="Balls", value=str(balls), inline=True)
+        embed.add_field(name="Bet", value=f"{total_bet} Scrap", inline=True)
         if gif is None:
             await interaction.followup.send(embed=embed)
         else:
