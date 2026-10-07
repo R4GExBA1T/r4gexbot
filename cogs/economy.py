@@ -220,6 +220,27 @@ class Economy(commands.Cog):
             ephemeral=True,
         )
 
+    # -- ecoremove (staff only) ---------------------------------------------
+
+    @app_commands.command(name="ecoremove", description="Staff only: remove Scrap from a member")
+    @app_commands.describe(member="Who loses the Scrap", amount="How much Scrap to remove")
+    async def ecoremove(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        await interaction.response.defer(ephemeral=True)
+        if not any(r.name in STAFF_ROLE_NAMES for r in interaction.user.roles):
+            await interaction.followup.send(
+                "🔒 `/ecoremove` is staff-only.", ephemeral=True
+            )
+            return
+        if amount <= 0:
+            await interaction.followup.send("❌ Amount must be positive.", ephemeral=True)
+            return
+        new_bal = await _economy(self.bot).deduct_scrap(member.id, amount)
+        await interaction.followup.send(
+            f"🗑️ {interaction.user.mention} removed **{amount}** Scrap from {member.mention} "
+            f"(now at **{new_bal}**).",
+            ephemeral=True,
+        )
+
     # -- reset (staff only) ---------------------------------------------------
 
     @app_commands.command(name="reset", description="Staff only: reset a player's spin/reward cooldown")
