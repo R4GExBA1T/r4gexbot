@@ -73,11 +73,18 @@ def simulate_drop() -> tuple[list[tuple[float, float]], int]:
     return path, bin_idx
 
 
-def plinko_animation_gif(risk: str, frames: int = 36) -> tuple[io.BytesIO, float, int]:
-    """Animate the chrome ball dropping. Returns (gif, multiplier, bin)."""
+def plinko_animation_gif(risk: str, balls: int = 1,
+                         frames: int = 36) -> tuple[io.BytesIO, list[float]]:
+    """Animate chrome ball(s) dropping. Returns (gif, [multipliers]).
+    Balls drop with a slight stagger for visual appeal."""
     mults = MULTIPLIERS[risk]
-    path, bin_idx = simulate_drop()
-    mult = mults[bin_idx]
+
+    # Simulate each ball's path.
+    all_paths: list[tuple[list[tuple[float, float]], int]] = []
+    for _ in range(balls):
+        path, bin_idx = simulate_drop()
+        all_paths.append((path, bin_idx))
+    multipliers = [mults[bin_idx] for _, bin_idx in all_paths]
 
     bg = Image.open(os.path.join(_ASSETS, "plinko_bg.png")).convert("RGB")
     bg = bg.resize((W, H), Image.LANCZOS)
@@ -103,26 +110,17 @@ def plinko_animation_gif(risk: str, frames: int = 36) -> tuple[io.BytesIO, float
     ball_size = 20
     ball_img = _load_ball(ball_size)
 
-    # Interpolate the path across frames.
-    total_segs = len(path) - 1
-    out_frames: list[Image.Image] = []
-    for f in range(frames):
-        t = (f + 1) / frames
-        # Ease: fast at top, slight slow at bottom.
-        eased = t ** 0.9
-        pos = eased * total_segs
-        i0 = int(pos)
-        i1 = min(i0 + 1, total_segs)
-        ft = pos - i0
-        x0, y0 = path[i0]
-        x1, y1 = path[i1]
-        bx = x0 + (x1 - x0) * ft
-        by = y0 + (y1 - y0) * ft
+    # Stagger: each ball starts a few frames after the previous.
+    stagger = 8
+    total_frames = frames + stagger * (balls - 1)
+    win_bins = {bin_idx for _, bin_idx in all_paths}
 
+    out_frames: list[Image.Image] = []
+    for f in range(total_frames):
         frame = bg.copy()
         d = ImageDraw.Draw(frame)
 
-        # Draw pegs (small steel dots with highlight).
+        # Draw pegs.
         for px, py in pegs:
             d.ellipse([px - 4, py - 4, px + 4, py + 4], fill=(120, 120, 130))
             d.ellipse([px - 2, py - 3, px + 1, py], fill=(220, 220, 230))
@@ -130,21 +128,17 @@ def plinko_animation_gif(risk: str, frames: int = 36) -> tuple[io.BytesIO, float
         # Draw bins.
         font = _font(11)
         for b in range(ROWS + 1):
-            bx0 = cx - (ROWS * col_gap / 2) + b * col_gap - bin_w / 2 + col_gap / 2 - bin_w / 2
-            # Simpler: bin centers aligned under the last row gaps.
             bcx = cx - ROWS * col_gap / 2 + b * col_gap
             x0b, x1b = bcx - bin_w / 2 + 2, bcx + bin_w / 2 - 2
             m = mults[b]
-            # Color by value: red (low) -> yellow -> green (high).
             if m < 1:
                 col = (180, 60, 60)
             elif m < 2:
                 col = (180, 160, 60)
             else:
                 col = (60, 180, 80)
-            # Highlight the winning bin on the final frames.
-            if f >= frames - 6 and b == bin_idx:
-                col = (255, 215, 0)
+            # Highlight winning bins near the end.
+            if f >= total_frames - 8 and b in win_bins:
                 d.rounded_rectangle([x0b - 2, bin_top - 2, x1b + 2, bin_bot + 2],
                                     radius=6, outline=(255, 215, 0), width=3)
             d.rounded_rectangle([x0b, bin_top, x1b, bin_bot],
@@ -155,13 +149,31 @@ def plinko_animation_gif(risk: str, frames: int = 36) -> tuple[io.BytesIO, float
             d.text((bcx - tw / 2 - tb[0], bin_top + 12 - tb[1]),
                    txt, font=font, fill=(255, 255, 255))
 
-        # Draw the ball.
-        if ball_img:
-            frame.paste(ball_img,
-                        (int(bx - ball_size / 2), int(by - ball_size / 2)),
-                        ball_img)
-        else:
-            d.ellipse([bx - 9, by - 9, bx + 9, by + 9], fill=(200, 200, 210))
+        # Draw each ball at its staggered position.
+        for bi, (path, _) in enumerate(all_paths):
+            start = bi * stagger
+            local_f = f - start
+            if local_f < 0:
+                continue  # not dropped yet
+            local_f = min(local_f, frames - 1)
+            t = (local_f + 1) / frames
+            eased = t ** 0.9
+            total_segs = len(path) - 1
+            pos = eased * total_segs
+            i0 = int(pos)
+            i1 = min(i0 + 1, total_segs)
+            ft = pos - i0
+            x0, y0 = path[i0]
+            x1, y1 = path[i1]
+            bx = x0 + (x1 - x0) * ft
+            by = y0 + (y1 - y0) * ft
+            if ball_img:
+                frame.paste(ball_img,
+                            (int(bx - ball_size / 2), int(by - ball_size / 2)),
+                            ball_img)
+            else:
+                d.ellipse([bx - 9, by - 9, bx + 9, by + 9],
+                          fill=(200, 200, 210))
 
         out_frames.append(frame)
 
@@ -172,4 +184,4 @@ def plinko_animation_gif(risk: str, frames: int = 36) -> tuple[io.BytesIO, float
     out_frames[0].save(buf, format="GIF", save_all=True,
                        append_images=out_frames[1:], duration=60, loop=0)
     buf.seek(0)
-    return buf, mult, bin_idx
+    return buf, multipliers
