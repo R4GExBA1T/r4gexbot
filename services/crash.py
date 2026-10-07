@@ -71,19 +71,38 @@ def crash_animation_gif(crash_point: float, cashout: float | None = None,
                 y = pad_t + ch
             pts.append((x, y))
         if len(pts) > 1:
-            color = (80, 255, 140) if (won or t < 1.0) else (255, 70, 70)
-            d.line(pts, fill=color, width=4)
-            # Glow dot at the head.
+            base = (80, 255, 140) if (won or t < 1.0) else (255, 70, 70)
+            # Layered glow: wide faint, medium, then bright core.
+            d.line(pts, fill=tuple(c // 4 for c in base), width=12)
+            d.line(pts, fill=tuple(c // 2 for c in base), width=7)
+            d.line(pts, fill=base, width=4)
+            # Glow dot at the head with halo.
             hx, hy = pts[-1]
-            d.ellipse([hx - 7, hy - 7, hx + 7, hy + 7], fill=color)
+            d.ellipse([hx - 14, hy - 14, hx + 14, hy + 14],
+                      fill=tuple(c // 4 for c in base))
+            d.ellipse([hx - 8, hy - 8, hx + 8, hy + 8], fill=base)
+            d.ellipse([hx - 3, hy - 3, hx + 3, hy + 3], fill=(255, 255, 255))
 
-        # Multiplier text, big and centered.
-        font = _font(56)
+        # Multiplier text, big and centered, with dark outline for readability.
+        font = _font(64)
         txt = f"{mult:.2f}x"
-        color = (80, 255, 140) if won else ((255, 70, 70) if t >= 1.0 else (255, 255, 255))
+        tcolor = (80, 255, 140) if won else ((255, 70, 70) if t >= 1.0 else (255, 255, 255))
         tb = d.textbbox((0, 0), txt, font=font)
         tw = tb[2] - tb[0]
-        d.text((W / 2 - tw / 2 - tb[0], 12), txt, font=font, fill=color)
+        tx, ty = W / 2 - tw / 2 - tb[0], 10
+        # Outline.
+        for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, 2), (-2, 2), (2, -2)]:
+            d.text((tx + ox, ty + oy), txt, font=font, fill=(0, 0, 0))
+        d.text((tx, ty), txt, font=font, fill=tcolor)
+
+        # Target indicator.
+        if cashout is not None and won:
+            sfont = _font(20)
+            stxt = f"TARGET {cashout:.2f}x"
+            stb = d.textbbox((0, 0), stxt, font=sfont)
+            stw = stb[2] - stb[0]
+            d.text((W / 2 - stw / 2 - stb[0], 84), stxt, font=sfont,
+                   fill=(80, 255, 140))
 
         out_frames.append(frame)
 
