@@ -18,6 +18,7 @@ from services.economy import (
     EconomyService,
 )
 from services.wheel import spin_wheel_gif
+from services.prize_wheel import spin_daily_gif, spin_vip_gif
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
 VIP_ROLE_NAME = "VIP"
@@ -36,18 +37,24 @@ class Economy(commands.Cog):
         await interaction.followup.send(str(exc), ephemeral=True)
 
     async def _bandit_spin(self, interaction: discord.Interaction,
-                           result_embed: discord.Embed, win_amount: int):
-        """Bandit Camp wheel: spins the REAL wheel disc, stops, and stamps
-        the exact amount won in the hub."""
+                           result_embed: discord.Embed, win_amount: int,
+                           wheel_type: str = "daily"):
+        """Hyper-realistic prize wheel: spins, lands on the winning segment,
+        and stamps the exact amount won in gold at the hub."""
         try:
-            gif = await asyncio.to_thread(spin_wheel_gif, win_amount)
+            if wheel_type == "vip":
+                gif = await asyncio.to_thread(spin_vip_gif, win_amount)
+                filename = "vip_wheel.gif"
+            else:
+                gif = await asyncio.to_thread(spin_daily_gif, win_amount)
+                filename = "daily_wheel.gif"
         except Exception:
             gif = None
         if gif is None:
             await interaction.followup.send(embed=result_embed)
             return
-        file = discord.File(gif, filename="bandit_wheel.gif")
-        result_embed.set_image(url="attachment://bandit_wheel.gif")
+        file = discord.File(gif, filename=filename)
+        result_embed.set_image(url=f"attachment://{filename}")
         await interaction.followup.send(file=file, embed=result_embed)
 
     # -- daily wheel ----------------------------------------------------
@@ -83,7 +90,7 @@ class Economy(commands.Cog):
             embed.add_field(name="Streak", value=f"{result.streak}-day 🔥", inline=True)
         embed.add_field(name="Balance", value=f"**{result.new_balance}** Scrap", inline=False)
         embed.set_footer(text=f"Spin again in 24h • {interaction.user.display_name}")
-        await self._bandit_spin(interaction, embed, result.total)
+        await self._bandit_spin(interaction, embed, result.total, "daily")
 
     # -- VIP hourly spin --------------------------------------------------
 
@@ -116,7 +123,7 @@ class Economy(commands.Cog):
         embed.add_field(name="Won", value=f"**{result.total}** Scrap", inline=True)
         embed.add_field(name="Balance", value=f"**{result.new_balance}** Scrap", inline=True)
         embed.set_footer(text=f"Spin again in 1h • {interaction.user.display_name}")
-        await self._bandit_spin(interaction, embed, result.total)
+        await self._bandit_spin(interaction, embed, result.total, "vip")
 
     # -- weekly ----------------------------------------------------------
 
