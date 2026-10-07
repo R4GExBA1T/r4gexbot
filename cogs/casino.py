@@ -21,6 +21,7 @@ from services.blackjack import render_blackjack_table
 from services.crash import roll_crash_point, crash_animation_gif
 from services.mines import render_mines_board, mines_multiplier
 from services.plinko import plinko_animation_gif, MULTIPLIERS
+from services.hilo import render_hilo_table, new_card, card_value
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
@@ -544,6 +545,173 @@ class Casino(commands.Cog):
             file = discord.File(gif, filename="plinko.gif")
             embed.set_image(url="attachment://plinko.gif")
             await interaction.followup.send(file=file, embed=embed)
+
+    # -- hi-lo ------------------------------------------------------------
+
+    @app_commands.command(name="hilo", description="Guess higher or lower, build your streak")
+    @app_commands.describe(bet="How much Scrap to bet")
+    async def hilo(self, interaction: discord.Interaction, bet: int):
+        await interaction.response.defer()
+        if not await self._take_bet(interaction, bet):
+            return
+
+        view = HiLoView(self.bot, interaction.user.id, bet)
+        embed, file = view._render()
+        await interaction.followup.send(embed=embed, view=view, file=file)
+        view.message = await interaction.original_response()
+
+
+class HiLoView(discord.ui.View):
+    """Interactive Hi-Lo: guess higher/lower, cash out anytime."""
+
+    def __init__(self, bot: commands.Bot, user_id: int, bet: int):
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.bet = bet
+        self.current_card = new_card()
+        self.streak = 0
+        self.multiplier = 1.0
+        self.over = False
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ This isn't your game.", ephemeral=True
+            )
+            return False
+        return True
+
+    def _potential(self) -> int:
+        return int(self.bet * self.multiplier)
+
+    def _render(self):
+        """Render the current table state."""
+        buf = render_hilo_table(
+            self.current_card, self.streak, self.multiplier,
+            self.bet, self._potential()
+        )
+        file = discord.File(buf, filename="hilo.png")
+        embed = discord.Embed(title="⬆️ Hi-Lo ⬇️", color=0xCE6A2C)
+        embed.set_image(url="attachment://hilo.png")
+        if not self.over:
+            embed.description = (
+                f"Current card: **{self.current_card}**\n"
+                "Will the next card be higher or lower?"
+            )
+        return embed, file
+
+    async def _guess(self, interaction: discord.Interaction, guess_high: bool):
+        """Handle a higher/lower guess."""
+        if self.over:
+            return
+
+        new = new_card(exclude=self.current_card)
+        old_val = card_value(self.current_card)
+        new_val = card_value(new)
+
+        # Tie = push (redraw, streak continues)
+        if new_val == old_val:
+            self.current_card = new
+            embed, file = self._render()
+            embed.description = (
+                f"Tie! **{new}** — push, try again.\n"
+                f"Current card: **{self.current_card}**"
+            )
+            await interaction.response.edit_message(
+                embed=embed, view=self, attachments=[file]
+            )
+            return
+
+        correct = (new_val > old_val) if guess_high else (new_val < old_val)
+
+        if correct:
+            self.streak += 1
+            self.multiplier *= 1.5
+            self.current_card = new
+            embed, file = self._render()
+            direction = "higher ⬆️" if guess_high else "lower ⬇️"
+            embed.description = (
+                f"✅ **{new}** was {direction}! "
+                f"Streak: **{self.streak}** ({self.multiplier:.1f}x)\n"
+                "Keep going or cash out?"
+            )
+            await interaction.response.edit_message(
+                embed=embed, view=self, attachments=[file]
+            )
+        else:
+            self.over = True
+            for child in self.children:
+                child.disabled = True
+            direction = "higher ⬆️" if guess_high else "lower ⬇️"
+            embed, file = self._render()
+            embed.description = (
+                f"❌ **{new}** was not {direction}. "
+                f"You lose **{self.bet}** Scrap."
+            )
+            embed.color = 0xFF4646
+            await interaction.response.edit_message(
+                embed=embed, view=self, attachments=[file]
+            )
+
+    @discord.ui.button(label="Higher", style=discord.ButtonStyle.success, emoji="⬆️")
+    async def higher(self, interaction: discord.Interaction,
+                     button: discord.ui.Button):
+        await self._guess(interaction, guess_high=True)
+
+    @discord.ui.button(label="Lower", style=discord.ButtonStyle.danger, emoji="⬇️")
+    async def lower(self, interaction: discord.Interaction,
+                    button: discord.ui.Button):
+        await self._guess(interaction, guess_high=False)
+
+    @discord.ui.button(label="Cash Out", style=discord.ButtonStyle.primary, emoji="💰")
+    async def cash_out(self, interaction: discord.Interaction,
+                       button: discord.ui.Button):
+        if self.over:
+            return
+        self.over = True
+        for child in self.children:
+            child.disabled = True
+
+        winnings = self._potential()
+        profit = winnings - self.bet
+        if winnings > 0:
+            await self.bot.economy.add_scrap(self.user_id, winnings)
+
+        embed, file = self._render()
+        if profit > 0:
+            embed.description = (
+                f"💰 Cashed out! You win **{profit}** Scrap "
+                f"(total **{winnings}**)."
+            )
+            embed.color = 0x50FF8C
+        else:
+            embed.description = "Cashed out — bet returned."
+        await interaction.response.edit_message(
+            embed=embed, view=self, attachments=[file]
+        )
+
+    async def on_timeout(self):
+        if self.over:
+            return
+        self.over = True
+        for child in self.children:
+            child.disabled = True
+        # Auto cash out on timeout
+        winnings = self._potential()
+        if winnings > 0:
+            await self.bot.economy.add_scrap(self.user_id, winnings)
+        if self.message is not None:
+            try:
+                embed, file = self._render()
+                embed.description = "⏰ Time expired — auto cashed out."
+                await self.message.edit(embed=embed, view=self,
+                                        attachments=[file])
+            except discord.HTTPException:
+                pass
+
+
 class MinesView(discord.ui.View):
     """Interactive Mines board: pick tiles via select menu, cash out anytime."""
 
