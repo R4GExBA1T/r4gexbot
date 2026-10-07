@@ -16,15 +16,27 @@ from discord.ext import commands
 
 from services.coinflip import flip_coin_gif
 from services.roulette import roulette_spin_gif
+from services.slots import slots_spin_gif, SYMBOLS
+from services.blackjack import render_blackjack_table
 from services.economy import EconomyError, EconomyService
 
 RUST_COLOR = 0xCE6A2C  # rusty orange
 
 # -- slots ---------------------------------------------------------------
 
-REELS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
+# Rust-themed slot symbols (keys match services/slots.py).
+REELS = ["seven", "supplydrop", "ak", "facemask", "sulfur", "scrap"]
+# Display names for results.
+REEL_NAMES = {
+    "seven": "Golden 7",
+    "supplydrop": "Supply Drop",
+    "ak": "AK-47",
+    "facemask": "Facemask",
+    "sulfur": "Sulfur",
+    "scrap": "Scrap",
+}
 # Three-of-a-kind multipliers; anything not listed pays 10x.
-TRIPLE_MULTIPLIER = {"7️⃣": 20, "💎": 15}
+TRIPLE_MULTIPLIER = {"seven": 20, "supplydrop": 15}
 PAIR_MULTIPLIER = 2
 
 
@@ -91,12 +103,18 @@ class BlackjackView(discord.ui.View):
         else:
             dealer_txt = f"{fmt_hand(self.dealer)} (`{hand_value(self.dealer)}`)"
         embed = discord.Embed(title="🃏 Blackjack", color=RUST_COLOR)
+        embed.set_image(url="attachment://blackjack.png")
         embed.add_field(
             name=f"Your hand (`{p_val}`)", value=fmt_hand(self.player), inline=False
         )
         embed.add_field(name="Dealer", value=dealer_txt, inline=False)
         embed.add_field(name="Bet", value=f"{self.bet} Scrap", inline=True)
         return embed
+
+    def _table_file(self, hide_dealer: bool = True) -> discord.File:
+        """Render the current table state as a Discord file."""
+        buf = render_blackjack_table(self.player, self.dealer, hide_dealer)
+        return discord.File(buf, filename="blackjack.png")
 
     async def _finish(self, interaction: discord.Interaction, note: str):
         """Settle a finished round and disable the buttons."""
@@ -105,7 +123,9 @@ class BlackjackView(discord.ui.View):
             child.disabled = True
         embed = self._embed(hide_dealer=False)
         embed.add_field(name="Result", value=note, inline=False)
-        await interaction.response.edit_message(embed=embed, view=self)
+        file = self._table_file(hide_dealer=False)
+        await interaction.response.edit_message(embed=embed, view=self,
+                                               attachments=[file])
 
     async def _settle_stand(self, interaction: discord.Interaction):
         """Player stood: dealer plays out, then compare."""
@@ -138,7 +158,9 @@ class BlackjackView(discord.ui.View):
         elif hand_value(self.player) == 21:
             await self._settle_stand(interaction)
         else:
-            await interaction.response.edit_message(embed=self._embed(), view=self)
+            file = self._table_file()
+            await interaction.response.edit_message(embed=self._embed(), view=self,
+                                                   attachments=[file])
 
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary, emoji="✋")
     async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -214,14 +236,20 @@ class Casino(commands.Cog):
         if not await self._take_bet(interaction, bet):
             return
         spin = [random.choice(REELS) for _ in range(3)]
-        line = " | ".join(spin)
+        names = [REEL_NAMES[s] for s in spin]
+        line = " | ".join(names)
         econ = _economy(self.bot)
+
+        try:
+            gif = await asyncio.to_thread(slots_spin_gif, spin)
+        except Exception:
+            gif = None
 
         if spin[0] == spin[1] == spin[2]:
             mult = TRIPLE_MULTIPLIER.get(spin[0], 10)
             await econ.add_scrap(interaction.user.id, bet * mult)
             msg = (
-                f"🎰 `{line}`\n**JACKPOT!** Three {spin[0]} — "
+                f"🎰 `{line}`\n**JACKPOT!** Three {names[0]} — "
                 f"**{mult}x**! You win **{bet * (mult - 1)}** Scrap."
             )
         elif spin[0] == spin[1] or spin[1] == spin[2] or spin[0] == spin[2]:
@@ -232,7 +260,11 @@ class Casino(commands.Cog):
             )
         else:
             msg = f"🎰 `{line}`\nNo luck — you lose **{bet}** Scrap."
-        await interaction.followup.send(msg)
+        if gif is None:
+            await interaction.followup.send(msg)
+        else:
+            file = discord.File(gif, filename="slots.gif")
+            await interaction.followup.send(msg, file=file)
 
     # -- blackjack ------------------------------------------------------
 
@@ -262,10 +294,12 @@ class Casino(commands.Cog):
             else:
                 note = f"😞 Dealer blackjack. You lose **{bet}** Scrap."
             embed.add_field(name="Result", value=note, inline=False)
-            await interaction.followup.send(embed=embed, view=view)
+            file = view._table_file(hide_dealer=False)
+            await interaction.followup.send(embed=embed, view=view, file=file)
             return
 
-        await interaction.followup.send(embed=view._embed(), view=view)
+        file = view._table_file()
+        await interaction.followup.send(embed=view._embed(), view=view, file=file)
         view.message = await interaction.original_response()
 
     # -- roulette ---------------------------------------------------------
