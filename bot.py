@@ -56,11 +56,25 @@ class Ximmy(commands.Bot):
         await self.economy.connect()
         await self.load_extension("cogs.economy")
         await self.load_extension("cogs.casino")
+        await self.load_extension("cogs.clans")
         # NOTE: Auto-sync disabled — commands are managed manually via API
-        # to avoid wiping. Re-enable after fixing the tree registration issue.
+        # for now. The 2026-10-07 wipe root cause is understood (see below);
+        # uncomment the guarded block to re-enable safe auto-sync.
+        #
+        # Root cause: tree.sync(guild=...) only uploads commands bound to that
+        # guild (tree._guild_commands). Cog commands register GLOBALLY
+        # (tree._global_commands), so the guild bucket was empty and every
+        # guild sync bulk-upserted [] — replacing the guild's command list with
+        # nothing. Fix: copy_global_to(guild) first, and refuse to sync when
+        # the payload would be empty.
         # guild = discord.Object(id=1556869956388266037)  # R4GE 3X
-        # synced = await self.tree.sync(guild=guild)
-        # print(f"Ximmy online — synced {len(synced)} slash commands.")
+        # self.tree.copy_global_to(guild=guild)
+        # payload = list(self.tree.walk_commands(guild=guild))
+        # if not payload:
+        #     print("Ximmy online — REFUSED guild sync: empty payload, skipping to avoid wipe.")
+        # else:
+        #     synced = await self.tree.sync(guild=guild)
+        #     print(f"Ximmy online — synced {len(synced)} slash commands.")
         print(f"Ximmy online — auto-sync disabled, commands managed via API.")
 
     async def close(self) -> None:
