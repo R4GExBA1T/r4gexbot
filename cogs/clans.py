@@ -1,288 +1,241 @@
-"""Clan system: create, join, invite, roles, leaderboards."""
+"""Clan commands: /clan create, invite, accept, leave, kick, promote, info, leaderboard."""
 from __future__ import annotations
 
-import time
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-CREATE_COST = 500
-MAX_NAME_LEN = 32
-
-
-class ClanError(Exception):
-    pass
-
-
-class AlreadyInClanError(ClanError):
-    pass
+from services.clans import (
+    ClanError,
+    ClanService,
+    CREATE_COST,
+)
 
 
-class NotInClanError(ClanError):
-    pass
+def _clans(bot: commands.Bot) -> ClanService:
+    return bot.clans
 
 
-class NotLeaderError(ClanError):
-    pass
+def _economy(bot: commands.Bot):
+    return bot.economy
 
 
-class NotOfficerError(ClanError):
-    pass
+class Clans(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
+    clan = app_commands.Group(name="clan", description="Clan management")
 
-class ClanService:
-    """Clan persistence on the shared economy SQLite DB."""
+    async def _clan_embed(self, clan: dict) -> discord.Embed:
+        clans = _clans(self.bot)
+        members = await clans.get_members(clan["id"])
+        econ = _economy(self.bot)
+        total_scrap = await clans.clan_total_scrap(clan["id"], econ)
 
-    def __init__(self, db):
-        self.db = db
-
-    async def init(self) -> None:
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS clans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                leader_id INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-        """)
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS clan_members (
-                clan_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL DEFAULT 'member',
-                joined_at INTEGER NOT NULL,
-                PRIMARY KEY (clan_id, user_id)
-            )
-        """)
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS clan_invites (
-                clan_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                invited_by INTEGER NOT NULL,
-                created_at INTEGER NOT NULL,
-                PRIMARY KEY (clan_id, user_id)
-            )
-        """)
-        await self.db.commit()
-
-    async def get_user_clan(self, user_id: int) -> dict | None:
-        async with self.db.execute(
-            "SELECT c.id, c.name, c.leader_id, c.created_at, m.role "
-            "FROM clans c JOIN clan_members m ON m.clan_id = c.id "
-            "WHERE m.user_id = ?", (user_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0], "name": row[1], "leader_id": row[2],
-            "created_at": row[3], "role": row[4],
-        }
-
-    async def get_clan(self, clan_id: int) -> dict | None:
-        async with self.db.execute(
-            "SELECT id, name, leader_id, created_at FROM clans WHERE id = ?",
-            (clan_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return {"id": row[0], "name": row[1], "leader_id": row[2],
-                "created_at": row[3]}
-
-    async def get_members(self, clan_id: int) -> list[dict]:
-        async with self.db.execute(
-            "SELECT user_id, role, joined_at FROM clan_members "
-            "WHERE clan_id = ? ORDER BY "
-            "CASE role WHEN 'leader' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END, "
-            "joined_at",
-            (clan_id,)
-        ) as cur:
-            rows = await cur.fetchall()
-        return [{"user_id": r[0], "role": r[1], "joined_at": r[2]}
-                for r in rows]
-
-    async def create_clan(self, user_id: int, name: str) -> dict:
-        name = name.strip()
-        if not name or len(name) > MAX_NAME_LEN:
-            raise ClanError(
-                f"❌ Clan name must be 1-{MAX_NAME_LEN} characters.")
-        if await self.get_user_clan(user_id):
-            raise AlreadyInClanError("❌ You're already in a clan. Leave it first.")
-        # Name taken?
-        async with self.db.execute(
-            "SELECT id FROM clans WHERE LOWER(name) = LOWER(?)", (name,)
-        ) as cur:
-            if await cur.fetchone():
-                raise ClanError(f"❌ A clan named **{name}** already exists.")
-        now = int(time.time())
-        async with self.db.execute(
-            "INSERT INTO clans (name, leader_id, created_at) VALUES (?, ?, ?)",
-            (name, user_id, now)
-        ) as cur:
-            clan_id = cur.lastrowid
-        await self.db.execute(
-            "INSERT INTO clan_members (clan_id, user_id, role, joined_at) "
-            "VALUES (?, ?, 'leader', ?)",
-            (clan_id, user_id, now)
-        )
-        await self.db.commit()
-        return {"id": clan_id, "name": name, "leader_id": user_id}
-
-    async def invite(self, inviter_id: int, target_id: int) -> dict:
-        if inviter_id == target_id:
-            raise ClanError("❌ You can't invite yourself.")
-        clan = await self.get_user_clan(inviter_id)
-        if not clan:
-            raise NotInClanError("❌ You're not in a clan.")
-        if clan["role"] not in ("leader", "officer"):
-            raise NotOfficerError("❌ Only the leader and officers can invite.")
-        if await self.get_user_clan(target_id):
-            raise ClanError("❌ That player is already in a clan.")
-        # Already invited?
-        async with self.db.execute(
-            "SELECT 1 FROM clan_invites WHERE clan_id = ? AND user_id = ?",
-            (clan["id"], target_id)
-        ) as cur:
-            if await cur.fetchone():
-                raise ClanError("❌ That player already has a pending invite.")
-        await self.db.execute(
-            "INSERT INTO clan_invites (clan_id, user_id, invited_by, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (clan["id"], target_id, inviter_id, int(time.time()))
-        )
-        await self.db.commit()
-        return clan
-
-    async def get_invites(self, user_id: int) -> list[dict]:
-        async with self.db.execute(
-            "SELECT i.clan_id, c.name, i.invited_by, i.created_at "
-            "FROM clan_invites i JOIN clans c ON c.id = i.clan_id "
-            "WHERE i.user_id = ? ORDER BY i.created_at DESC",
-            (user_id,)
-        ) as cur:
-            rows = await cur.fetchall()
-        return [{"clan_id": r[0], "clan_name": r[1], "invited_by": r[2],
-                 "created_at": r[3]} for r in rows]
-
-    async def accept_invite(self, user_id: int, clan_id: int | None = None) -> dict:
-        invites = await self.get_invites(user_id)
-        if not invites:
-            raise ClanError("❌ You have no pending clan invites.")
-        if clan_id is None:
-            # Accept the most recent
-            invite = invites[0]
-        else:
-            invite = next((i for i in invites if i["clan_id"] == clan_id), None)
-            if not invite:
-                raise ClanError("❌ No invite from that clan.")
-        if await self.get_user_clan(user_id):
-            raise AlreadyInClanError("❌ You're already in a clan. Leave it first.")
-        now = int(time.time())
-        await self.db.execute(
-            "INSERT INTO clan_members (clan_id, user_id, role, joined_at) "
-            "VALUES (?, ?, 'member', ?)",
-            (invite["clan_id"], user_id, now)
-        )
-        await self.db.execute(
-            "DELETE FROM clan_invites WHERE user_id = ?", (user_id,)
-        )
-        await self.db.commit()
-        return await self.get_clan(invite["clan_id"])
-
-    async def decline_invite(self, user_id: int, clan_id: int | None = None) -> None:
-        invites = await self.get_invites(user_id)
-        if not invites:
-            raise ClanError("❌ You have no pending clan invites.")
-        if clan_id is None:
-            await self.db.execute(
-                "DELETE FROM clan_invites WHERE user_id = ?", (user_id,))
-        else:
-            await self.db.execute(
-                "DELETE FROM clan_invites WHERE user_id = ? AND clan_id = ?",
-                (user_id, clan_id))
-        await self.db.commit()
-
-    async def leave(self, user_id: int) -> str:
-        clan = await self.get_user_clan(user_id)
-        if not clan:
-            raise NotInClanError("❌ You're not in a clan.")
-        members = await self.get_members(clan["id"])
-        if clan["role"] == "leader":
-            if len(members) > 1:
-                raise ClanError(
-                    "❌ You're the leader! Promote someone to leader first "
-                    "or kick all members before leaving.")
-            # Last member — disband the clan
-            await self.db.execute(
-                "DELETE FROM clan_members WHERE clan_id = ?", (clan["id"],))
-            await self.db.execute(
-                "DELETE FROM clan_invites WHERE clan_id = ?", (clan["id"],))
-            await self.db.execute(
-                "DELETE FROM clans WHERE id = ?", (clan["id"],))
-            await self.db.commit()
-            return f"disbanded:{clan['name']}"
-        await self.db.execute(
-            "DELETE FROM clan_members WHERE clan_id = ? AND user_id = ?",
-            (clan["id"], user_id))
-        await self.db.commit()
-        return f"left:{clan['name']}"
-
-    async def kick(self, kicker_id: int, target_id: int) -> None:
-        clan = await self.get_user_clan(kicker_id)
-        if not clan:
-            raise NotInClanError("❌ You're not in a clan.")
-        if clan["role"] not in ("leader", "officer"):
-            raise NotOfficerError("❌ Only the leader and officers can kick.")
-        target = await self.get_user_clan(target_id)
-        if not target or target["id"] != clan["id"]:
-            raise ClanError("❌ That player isn't in your clan.")
-        if target["role"] == "leader":
-            raise ClanError("❌ You can't kick the leader.")
-        if clan["role"] == "officer" and target["role"] == "officer":
-            raise ClanError("❌ Officers can't kick other officers.")
-        await self.db.execute(
-            "DELETE FROM clan_members WHERE clan_id = ? AND user_id = ?",
-            (clan["id"], target_id))
-        await self.db.commit()
-
-    async def set_role(self, leader_id: int, target_id: int, role: str) -> None:
-        clan = await self.get_user_clan(leader_id)
-        if not clan:
-            raise NotInClanError("❌ You're not in a clan.")
-        if clan["role"] != "leader":
-            raise NotLeaderError("❌ Only the leader can change roles.")
-        if leader_id == target_id:
-            raise ClanError("❌ You can't change your own role.")
-        target = await self.get_user_clan(target_id)
-        if not target or target["id"] != clan["id"]:
-            raise ClanError("❌ That player isn't in your clan.")
-        if role == "leader":
-            # Transfer leadership
-            await self.db.execute(
-                "UPDATE clan_members SET role = 'member' "
-                "WHERE clan_id = ? AND user_id = ?",
-                (clan["id"], leader_id))
-            await self.db.execute(
-                "UPDATE clans SET leader_id = ? WHERE id = ?",
-                (target_id, clan["id"]))
-        await self.db.execute(
-            "UPDATE clan_members SET role = ? "
-            "WHERE clan_id = ? AND user_id = ?",
-            (role, clan["id"], target_id))
-        await self.db.commit()
-
-    async def leaderboard(self, limit: int = 10) -> list[dict]:
-        """Top clans by member count, then total member Scrap."""
-        async with self.db.execute(
-            "SELECT c.id, c.name, COUNT(m.user_id) AS members "
-            "FROM clans c LEFT JOIN clan_members m ON m.clan_id = c.id "
-            "GROUP BY c.id ORDER BY members DESC, c.created_at ASC "
-            f"LIMIT {int(limit)}"
-        ) as cur:
-            rows = await cur.fetchall()
-        return [{"id": r[0], "name": r[1], "members": r[2]} for r in rows]
-
-    async def clan_total_scrap(self, clan_id: int, economy) -> int:
-        members = await self.get_members(clan_id)
-        total = 0
+        role_emoji = {"leader": "👑", "officer": "🛡️", "member": "⚔️"}
+        lines = []
         for m in members:
-            total += await economy.get_balance(m["user_id"])
-        return total
+            emoji = role_emoji.get(m["role"], "⚔️")
+            lines.append(f"{emoji} <@{m['user_id']}> — {m['role']}")
+
+        embed = discord.Embed(
+            title=f"🛡️ {clan['name']}",
+            description="\n".join(lines) if lines else "No members.",
+            color=0x6A1B9A,
+        )
+        embed.add_field(name="Members", value=str(len(members)), inline=True)
+        embed.add_field(name="Total Scrap", value=f"{total_scrap:,}", inline=True)
+        embed.add_field(name="Leader", value=f"<@{clan['leader_id']}>", inline=True)
+        return embed
+
+    @clan.command(name="create", description=f"Create a clan ({CREATE_COST} Scrap)")
+    @app_commands.describe(name="Your clan's name")
+    async def clan_create(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        econ = _economy(self.bot)
+        try:
+            # Charge first
+            from services.economy import EconomyError
+            try:
+                await econ.deduct_scrap(interaction.user.id, CREATE_COST)
+            except EconomyError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
+            clan = await clans.create_clan(interaction.user.id, name)
+        except ClanError as exc:
+            # Refund on failure
+            await econ.add_scrap(interaction.user.id, CREATE_COST)
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        embed = await self._clan_embed(clan)
+        embed.description = (
+            f"🎉 Clan **{clan['name']}** created!\n\n" + (embed.description or "")
+        )
+        await interaction.followup.send(embed=embed)
+
+    @clan.command(name="invite", description="Invite a player to your clan")
+    @app_commands.describe(member="Who to invite")
+    async def clan_invite(self, interaction: discord.Interaction,
+                          member: discord.Member):
+        await interaction.response.defer(ephemeral=True)
+        clans = _clans(self.bot)
+        try:
+            clan = await clans.invite(interaction.user.id, member.id)
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Invited {member.mention} to **{clan['name']}**!", ephemeral=True
+        )
+        # DM-ish: mention in followup is ephemeral, so also send a public note
+        # (the invitee checks /clan invites)
+
+    @clan.command(name="invites", description="Check your pending clan invites")
+    async def clan_invites(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        clans = _clans(self.bot)
+        invites = await clans.get_invites(interaction.user.id)
+        if not invites:
+            await interaction.followup.send(
+                "📭 No pending clan invites.", ephemeral=True)
+            return
+        lines = [
+            f"🛡️ **{i['clan_name']}** — invited by <@{i['invited_by']}>"
+            for i in invites
+        ]
+        await interaction.followup.send(
+            "📨 **Pending invites:**\n" + "\n".join(lines) +
+            "\n\nUse `/clan accept` to join!",
+            ephemeral=True)
+
+    @clan.command(name="accept", description="Accept a clan invite")
+    async def clan_accept(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        try:
+            clan = await clans.accept_invite(interaction.user.id)
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        embed = await self._clan_embed(clan)
+        await interaction.followup.send(
+            f"🎉 {interaction.user.mention} joined **{clan['name']}**!",
+            embed=embed)
+
+    @clan.command(name="decline", description="Decline clan invites")
+    async def clan_decline(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        clans = _clans(self.bot)
+        try:
+            await clans.decline_invite(interaction.user.id)
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send("✅ Invites declined.", ephemeral=True)
+
+    @clan.command(name="leave", description="Leave your clan")
+    async def clan_leave(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        try:
+            result = await clans.leave(interaction.user.id)
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        if result.startswith("disbanded:"):
+            name = result.split(":", 1)[1]
+            await interaction.followup.send(
+                f"💥 Clan **{name}** has been disbanded.")
+        else:
+            name = result.split(":", 1)[1]
+            await interaction.followup.send(
+                f"👋 {interaction.user.mention} left **{name}**.")
+
+    @clan.command(name="kick", description="Kick a member from your clan")
+    @app_commands.describe(member="Who to kick")
+    async def clan_kick(self, interaction: discord.Interaction,
+                        member: discord.Member):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        try:
+            await clans.kick(interaction.user.id, member.id)
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"🥾 {member.mention} was kicked from the clan.")
+
+    @clan.command(name="promote", description="Promote a member to officer")
+    @app_commands.describe(member="Who to promote")
+    async def clan_promote(self, interaction: discord.Interaction,
+                           member: discord.Member):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        try:
+            await clans.set_role(interaction.user.id, member.id, "officer")
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"🛡️ {member.mention} promoted to **Officer**!")
+
+    @clan.command(name="transfer", description="Transfer leadership to another member")
+    @app_commands.describe(member="Who becomes the new leader")
+    async def clan_transfer(self, interaction: discord.Interaction,
+                            member: discord.Member):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        try:
+            await clans.set_role(interaction.user.id, member.id, "leader")
+        except ClanError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"👑 {member.mention} is now the **Leader**!")
+
+    @clan.command(name="info", description="Show your clan's info")
+    async def clan_info(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        clan = await clans.get_user_clan(interaction.user.id)
+        if not clan:
+            await interaction.followup.send(
+                "❌ You're not in a clan. Create one with `/clan create`!",
+                ephemeral=True)
+            return
+        embed = await self._clan_embed(clan)
+        await interaction.followup.send(embed=embed)
+
+    @clan.command(name="leaderboard", description="Top clans by members")
+    async def clan_leaderboard(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        clans = _clans(self.bot)
+        econ = _economy(self.bot)
+        top = await clans.leaderboard(10)
+        if not top:
+            await interaction.followup.send(
+                "📭 No clans yet. Be the first with `/clan create`!")
+            return
+        medals = ["🥇", "🥈", "🥉"]
+        lines = []
+        for i, c in enumerate(top):
+            medal = medals[i] if i < 3 else f"`{i + 1}.`"
+            scrap = await clans.clan_total_scrap(c["id"], econ)
+            lines.append(
+                f"{medal} **{c['name']}** — {c['members']} members, "
+                f"{scrap:,} Scrap")
+        embed = discord.Embed(
+            title="🏆 Clan Leaderboard",
+            description="\n".join(lines),
+            color=0xFFD700,
+        )
+        await interaction.followup.send(embed=embed)
+
+
+async def setup(bot: commands.Bot):
+    # Init clan tables on the shared DB
+    clans = ClanService(bot.economy.db)
+    await clans.init()
+    bot.clans = clans
+    await bot.add_cog(Clans(bot))
