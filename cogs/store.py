@@ -14,7 +14,7 @@ from services.store import (
 )
 
 # Set this to your store URL after deployment
-STORE_URL = "https://r4ge-3x-store.hatch.meta.ai"
+STORE_URL = "https://muse.ai/s/r4ge-3x-public-store-xzxs6xxxtmqxvxgxxd"
 
 
 def _store(bot: commands.Bot) -> StoreService:
