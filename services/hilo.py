@@ -68,40 +68,47 @@ def card_value(card: str) -> int:
 
 def render_hilo_table(current_card: str, streak: int, multiplier: float,
                       bet: int, potential: int) -> io.BytesIO:
-    """Render the Hi-Lo table: current card, streak, multiplier, potential win."""
-    W, H = 500, 420
-    # Dark green felt
-    table = Image.new("RGB", (W, H), (20, 80, 40))
+    """Render the Hi-Lo table: photorealistic casino table, card with shadow."""
+    W, H = 600, 500
+
+    # Photorealistic table background
+    bg_path = os.path.join(_ASSETS, "hilo_bg.png")
+    if os.path.exists(bg_path):
+        table = Image.open(bg_path).convert("RGB").resize((W, H), Image.LANCZOS)
+    else:
+        table = Image.new("RGB", (W, H), (20, 80, 40))
     d = ImageDraw.Draw(table)
 
-    # Felt texture (subtle noise)
-    for _ in range(800):
-        x, y = random.randint(0, W - 1), random.randint(0, H - 1)
-        shade = random.randint(-8, 8)
-        r, g, b = 20 + shade, 80 + shade, 40 + shade
-        d.point((x, y), fill=(max(0, r), max(0, g), max(0, b)))
-
-    # Gold border
-    d.rectangle([8, 8, W - 9, H - 9], outline=(180, 150, 80), width=3)
-
-    # Title
-    font_title = _font(28)
-    title = "⬆️ HI-LO ⬇️"
+    # Title with gold
+    font_title = _font(30)
+    title = "HI-LO"
     tb = d.textbbox((0, 0), title, font=font_title)
     tw = tb[2] - tb[0]
-    d.text(((W - tw) / 2 - tb[0], 20 - tb[1]), title,
-           font=font_title, fill=(255, 215, 0))
+    # Dark outline for readability
+    tx, ty = (W - tw) / 2 - tb[0], 28 - tb[1]
+    for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
+        d.text((tx + ox, ty + oy), title, font=font_title, fill=(0, 0, 0))
+    d.text((tx, ty), title, font=font_title, fill=(255, 215, 0))
 
-    # Current card in center
+    # Current card with drop shadow
     card_img = draw_card(current_card)
-    cx = (W - CARD_W) // 2
-    cy = 100
+    # Slightly larger card for presence
+    card_img = card_img.resize((int(CARD_W * 1.2), int(CARD_H * 1.2)), Image.LANCZOS)
+    cw, ch = card_img.size
+    cx = (W - cw) // 2
+    cy = 110
+
+    # Drop shadow
+    shadow = Image.new("RGBA", (cw + 20, ch + 20), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sd.rounded_rectangle([10, 10, cw + 10, ch + 10], radius=12, fill=(0, 0, 0, 120))
+    shadow = shadow.filter(__import__("PIL.ImageFilter", fromlist=["GaussianBlur"]).GaussianBlur(8))
+    table.paste(shadow, (cx - 10, cy - 10), shadow)
     table.paste(card_img, (cx, cy))
 
-    # Stats below card
-    font_stat = _font(20)
-    y = cy + CARD_H + 20
-
+    # Stats with outline for readability
+    font_stat = _font(22)
+    y = cy + ch + 25
     stats = [
         f"Streak: {streak}  |  Multiplier: {multiplier:.1f}x",
         f"Potential: {potential} Scrap  (Bet: {bet})",
@@ -109,8 +116,10 @@ def render_hilo_table(current_card: str, streak: int, multiplier: float,
     for i, txt in enumerate(stats):
         tb = d.textbbox((0, 0), txt, font=font_stat)
         tw = tb[2] - tb[0]
-        d.text(((W - tw) / 2 - tb[0], y + i * 32 - tb[1]),
-               txt, font=font_stat, fill=(255, 255, 255))
+        sx, sy = (W - tw) / 2 - tb[0], y + i * 36 - tb[1]
+        for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
+            d.text((sx + ox, sy + oy), txt, font=font_stat, fill=(0, 0, 0))
+        d.text((sx, sy), txt, font=font_stat, fill=(255, 255, 255))
 
     buf = io.BytesIO()
     table.save(buf, format="PNG")
