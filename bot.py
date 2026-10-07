@@ -56,9 +56,10 @@ class Ximmy(commands.Bot):
         await self.economy.connect()
         await self.load_extension("cogs.economy")
         await self.load_extension("cogs.casino")
-        # Register slash commands globally (can take up to ~1h to appear;
-        # use guild-specific sync for instant testing — see README).
-        synced = await self.tree.sync()
+        # Guild-specific sync for instant command updates.
+        guild = discord.Object(id=1556869956388266037)  # R4GE 3X
+        self.tree.copy_global_to(guild=guild)
+        synced = await self.tree.sync(guild=guild)
         print(f"Ximmy online — synced {len(synced)} slash commands.")
 
     async def close(self) -> None:
