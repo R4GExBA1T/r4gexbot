@@ -56,10 +56,12 @@ class Ximmy(commands.Bot):
         await self.economy.connect()
         await self.load_extension("cogs.economy")
         await self.load_extension("cogs.casino")
-        # Guild-specific sync for instant command updates.
-        guild = discord.Object(id=1556869956388266037)  # R4GE 3X
-        synced = await self.tree.sync(guild=guild)
-        print(f"Ximmy online — synced {len(synced)} slash commands.")
+        # NOTE: Auto-sync disabled — commands are managed manually via API
+        # to avoid wiping. Re-enable after fixing the tree registration issue.
+        # guild = discord.Object(id=1556869956388266037)  # R4GE 3X
+        # synced = await self.tree.sync(guild=guild)
+        # print(f"Ximmy online — synced {len(synced)} slash commands.")
+        print(f"Ximmy online — auto-sync disabled, commands managed via API.")
 
     async def close(self) -> None:
         await self.economy.close()
