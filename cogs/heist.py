@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 # Role required to use the heist command (created by staff)
-HEIST_ROLE_NAME = "Heist Crew"
+HEIST_ROLE_NAME = "Thief Princess👑"
 # R4GExBA1T's Discord username (the victim)
 VICTIM_NAME = "r4gexba1t"
 
