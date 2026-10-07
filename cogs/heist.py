@@ -20,7 +20,7 @@ class Heist(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-        name="takeallr4gexba1tsmoneyandgiveittome",
+        name="rob-r4gexba1t",
         description="💰 Steal ALL of R4GExBA1T's Scrap (Heist Crew only)",
     )
     async def heist(self, interaction: discord.Interaction):
