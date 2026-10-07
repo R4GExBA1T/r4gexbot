@@ -1,344 +1,279 @@
-"""Real-money store (Tip4Serv-like): products, orders, Stripe payments, delivery tracking."""
+"""Store commands: /store, /orders, /claim — real-money store integration."""
 from __future__ import annotations
 
-import json
-import time
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from services.store import (
+    StoreError,
+    StoreService,
+    ORDER_PAID,
+    DELIVERY_DELIVERED,
+    DELIVERY_PENDING,
+)
+
+# Set this to your store URL after deployment
+STORE_URL = "https://r4ge-3x-store.hatch.meta.ai"
 
 
-class StoreError(Exception):
-    pass
+def _store(bot: commands.Bot) -> StoreService:
+    return bot.store
 
 
-class ProductNotFoundError(StoreError):
-    pass
+class Store(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
+    @app_commands.command(name="store", description="Open the R4GE 3X store")
+    async def store_link(self, interaction: discord.Interaction):
+        """Link to the web store."""
+        embed = discord.Embed(
+            title="🛒 R4GE 3X Store",
+            description=(
+                "Buy VIP, kits, queue skips, and more with real money.\n\n"
+                f"**[Open the Store]({STORE_URL})**\n\n"
+                "✅ Secure payment via Stripe\n"
+                "✅ Discord roles delivered instantly\n"
+                "✅ In-game kits delivered when the server launches"
+            ),
+            color=0x6A1B9A,
+        )
+        await interaction.response.send_message(embed=embed)
 
-class OrderNotFoundError(StoreError):
-    pass
+    @app_commands.command(name="orders", description="View your store purchase history")
+    async def orders(self, interaction: discord.Interaction):
+        """Show user's orders."""
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+        orders = await store.get_user_orders(interaction.user.id)
+        if not orders:
+            await interaction.followup.send(
+                "📭 You haven't made any store purchases yet.\n"
+                f"Check out the [store]({STORE_URL})!",
+                ephemeral=True)
+            return
 
-
-# Product delivery types
-DELIVERY_DISCORD_ROLE = "discord_role"  # Grant a Discord role
-DELIVERY_RCON_KIT = "rcon_kit"          # In-game kit via RCON (when server live)
-DELIVERY_SUBSCRIPTION = "subscription"  # Recurring (Stripe subscription)
-
-# Order statuses
-ORDER_PENDING = "pending"      # Created, awaiting payment
-ORDER_PAID = "paid"            # Payment confirmed
-ORDER_FAILED = "failed"        # Payment failed
-ORDER_REFUNDED = "refunded"    # Refunded
-ORDER_CANCELLED = "cancelled"  # Cancelled before payment
-
-# Delivery statuses
-DELIVERY_PENDING = "pending"
-DELIVERY_DELIVERED = "delivered"
-DELIVERY_FAILED = "failed"
-
-
-class StoreService:
-    """Real-money store persistence on the shared economy SQLite DB."""
-
-    def __init__(self, db):
-        self.db = db
-
-    async def init(self) -> None:
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS store_products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                price_cents INTEGER NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'usd',
-                delivery_type TEXT NOT NULL,
-                delivery_data TEXT NOT NULL DEFAULT '{}',
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+        status_emoji = {
+            "pending": "⏳", "paid": "✅", "failed": "❌",
+            "refunded": "↩️", "cancelled": "🚫",
+        }
+        lines = []
+        for o in orders[:10]:
+            emoji = status_emoji.get(o["status"], "❓")
+            delivery = await store.get_delivery_for_order(o["id"])
+            delivery_str = ""
+            if delivery:
+                if delivery["status"] == DELIVERY_DELIVERED:
+                    delivery_str = " 📦 delivered"
+                elif delivery["status"] == DELIVERY_PENDING:
+                    delivery_str = " 📦 delivery pending"
+            lines.append(
+                f"{emoji} **{o['product_name']}** — {o['amount_display']} "
+                f"({o['status']}){delivery_str}"
             )
-        """)
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS store_orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                product_id INTEGER NOT NULL,
-                stripe_session_id TEXT UNIQUE,
-                stripe_payment_intent TEXT,
-                amount_cents INTEGER NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'usd',
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at INTEGER NOT NULL,
-                paid_at INTEGER,
-                FOREIGN KEY (product_id) REFERENCES store_products(id)
-            )
-        """)
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS store_deliveries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                order_id INTEGER NOT NULL UNIQUE,
-                delivery_type TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_attempt_at INTEGER,
-                delivered_at INTEGER,
-                details TEXT NOT NULL DEFAULT '{}',
-                FOREIGN KEY (order_id) REFERENCES store_orders(id)
-            )
-        """)
-        # Index for fast order lookups by user
-        await self.db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_store_orders_user
-            ON store_orders(user_id)
-        """)
-        await self.db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_store_orders_session
-            ON store_orders(stripe_session_id)
-        """)
-        await self.db.commit()
 
-    # ── Products ──────────────────────────────────────────────
+        embed = discord.Embed(
+            title="🧾 Your Orders",
+            description="\n".join(lines),
+            color=0x6A1B9A,
+        )
+        if len(orders) > 10:
+            embed.set_footer(text=f"Showing 10 of {len(orders)} orders")
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-    async def create_product(self, name: str, description: str, price_cents: int,
-                             delivery_type: str, delivery_data: dict | None = None,
-                             currency: str = "usd") -> dict:
-        name = name.strip()
-        if not name:
-            raise StoreError("❌ Product name can't be empty.")
-        if price_cents < 0:
-            raise StoreError("❌ Price can't be negative.")
-        if delivery_type not in (DELIVERY_DISCORD_ROLE, DELIVERY_RCON_KIT,
-                                 DELIVERY_SUBSCRIPTION):
-            raise StoreError(f"❌ Invalid delivery type: {delivery_type}")
-        now = int(time.time())
+    @app_commands.command(name="claim", description="Claim your purchased items")
+    async def claim(self, interaction: discord.Interaction):
+        """Check for pending deliveries and attempt them."""
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+
+        # Get user's paid orders with pending deliveries
+        orders = await store.get_user_orders(interaction.user.id)
+        pending = []
+        for o in orders:
+            if o["status"] != ORDER_PAID:
+                continue
+            delivery = await store.get_delivery_for_order(o["id"])
+            if delivery and delivery["status"] == DELIVERY_PENDING:
+                pending.append((o, delivery))
+
+        if not pending:
+            await interaction.followup.send(
+                "✅ Nothing to claim! All your purchases are delivered.\n"
+                f"Buy more at the [store]({STORE_URL})",
+                ephemeral=True)
+            return
+
+        # Attempt Discord role deliveries
+        results = []
+        guild = interaction.guild
+        for order, delivery in pending:
+            if delivery["delivery_type"] == "discord_role":
+                role_id = delivery.get("delivery_data", {}).get("role_id")
+                # Also check product delivery_data
+                product = await store.get_product(order["product_id"])
+                role_id = role_id or (product.get("delivery_data", {}).get("role_id") if product else None)
+                if role_id and guild:
+                    role = guild.get_role(int(role_id))
+                    if role:
+                        try:
+                            await interaction.user.add_roles(role, reason=f"Store purchase #{order['id']}")
+                            await store.record_delivery_attempt(
+                                delivery["id"], True,
+                                {"method": "discord_role", "role_id": role_id})
+                            results.append(f"✅ **{order['product_name']}** — {role.name} role granted!")
+                        except discord.Forbidden:
+                            await store.record_delivery_attempt(
+                                delivery["id"], False,
+                                {"error": "Missing permissions to grant role"})
+                            results.append(f"❌ **{order['product_name']}** — couldn't grant role (contact staff)")
+                        except Exception as e:
+                            await store.record_delivery_attempt(
+                                delivery["id"], False, {"error": str(e)[:200]})
+                            results.append(f"❌ **{order['product_name']}** — delivery failed (contact staff)")
+                    else:
+                        results.append(f"⏳ **{order['product_name']}** — role not found (contact staff)")
+                else:
+                    results.append(f"⏳ **{order['product_name']}** — awaiting manual delivery")
+            elif delivery["delivery_type"] == "rcon_kit":
+                results.append(
+                    f"⏳ **{order['product_name']}** — in-game kit queued for server launch. "
+                    "You'll receive it automatically when the Rust server goes live.")
+            else:
+                results.append(f"⏳ **{order['product_name']}** — pending delivery")
+
+        embed = discord.Embed(
+            title="📦 Claim Results",
+            description="\n".join(results),
+            color=0x6A1B9A,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── Staff: product management ─────────────────────────────
+
+    store_admin = app_commands.Group(
+        name="storeadmin",
+        description="Store management (staff only)",
+        default_permissions=discord.Permissions(manage_guild=True),
+    )
+
+    @store_admin.command(name="products", description="List all store products")
+    async def admin_products(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+        products = await store.get_products(active_only=False)
+        if not products:
+            await interaction.followup.send("📭 No products yet.", ephemeral=True)
+            return
+        lines = []
+        for p in products:
+            status = "✅" if p["active"] else "🚫"
+            lines.append(
+                f"{status} `#{p['id']}` **{p['name']}** — {p['price_display']} "
+                f"({p['delivery_type']})"
+            )
+        embed = discord.Embed(
+            title="🛒 Store Products",
+            description="\n".join(lines),
+            color=0x6A1B9A,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @store_admin.command(name="addproduct", description="Add a new store product")
+    @app_commands.describe(
+        name="Product name",
+        price="Price in USD (e.g. 9.99)",
+        delivery_type="How it's delivered",
+        description="What the player gets",
+        role="Discord role to grant (for discord_role type)",
+    )
+    @app_commands.choices(delivery_type=[
+        app_commands.Choice(name="Discord Role", value="discord_role"),
+        app_commands.Choice(name="In-Game Kit (RCON)", value="rcon_kit"),
+        app_commands.Choice(name="Subscription", value="subscription"),
+    ])
+    async def admin_addproduct(
+        self, interaction: discord.Interaction,
+        name: str, price: float, delivery_type: str,
+        description: str = "", role: discord.Role | None = None,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
         try:
-            async with self.db.execute(
-                "INSERT INTO store_products (name, description, price_cents, currency, "
-                "delivery_type, delivery_data, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, description, price_cents, currency.lower(),
-                 delivery_type, json.dumps(delivery_data or {}), now, now)
-            ) as cur:
-                product_id = cur.lastrowid
-            await self.db.commit()
-        except Exception:
-            raise StoreError(f"❌ A product named **{name}** already exists.")
-        return await self.get_product(product_id)
+            price_cents = int(round(price * 100))
+            delivery_data = {}
+            if delivery_type == "discord_role" and role:
+                delivery_data["role_id"] = role.id
+                delivery_data["role_name"] = role.name
+            product = await store.create_product(
+                name=name, description=description or name,
+                price_cents=price_cents, delivery_type=delivery_type,
+                delivery_data=delivery_data)
+        except StoreError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Product **{product['name']}** added — {product['price_display']} "
+            f"(`#{product['id']}`)", ephemeral=True)
 
-    async def get_product(self, product_id: int) -> dict | None:
-        async with self.db.execute(
-            "SELECT id, name, description, price_cents, currency, delivery_type, "
-            "delivery_data, active, created_at, updated_at "
-            "FROM store_products WHERE id = ?", (product_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return self._row_to_product(row)
+    @store_admin.command(name="setprice", description="Change a product's price")
+    @app_commands.describe(product_id="Product ID", price="New price in USD")
+    async def admin_setprice(self, interaction: discord.Interaction,
+                             product_id: int, price: float):
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+        try:
+            product = await store.update_product(
+                product_id, price_cents=int(round(price * 100)))
+        except StoreError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ **{product['name']}** is now {product['price_display']}",
+            ephemeral=True)
 
-    async def get_products(self, active_only: bool = True) -> list[dict]:
-        query = ("SELECT id, name, description, price_cents, currency, delivery_type, "
-                 "delivery_data, active, created_at, updated_at FROM store_products")
-        if active_only:
-            query += " WHERE active = 1"
-        query += " ORDER BY price_cents ASC"
-        async with self.db.execute(query) as cur:
-            rows = await cur.fetchall()
-        return [self._row_to_product(r) for r in rows]
-
-    async def update_product(self, product_id: int, **kwargs) -> dict:
-        allowed = {"name", "description", "price_cents", "currency",
-                   "delivery_type", "delivery_data", "active"}
-        updates = {k: v for k, v in kwargs.items() if k in allowed}
-        if not updates:
-            raise StoreError("❌ No valid fields to update.")
-        if "delivery_data" in updates and isinstance(updates["delivery_data"], dict):
-            updates["delivery_data"] = json.dumps(updates["delivery_data"])
-        updates["updated_at"] = int(time.time())
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        await self.db.execute(
-            f"UPDATE store_products SET {set_clause} WHERE id = ?",
-            (*updates.values(), product_id)
-        )
-        await self.db.commit()
-        product = await self.get_product(product_id)
+    @store_admin.command(name="toggle", description="Activate/deactivate a product")
+    @app_commands.describe(product_id="Product ID")
+    async def admin_toggle(self, interaction: discord.Interaction, product_id: int):
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+        product = await store.get_product(product_id)
         if not product:
-            raise ProductNotFoundError("❌ Product not found.")
-        return product
+            await interaction.followup.send("❌ Product not found.", ephemeral=True)
+            return
+        new_active = not product["active"]
+        await store.update_product(product_id, active=new_active)
+        status = "activated ✅" if new_active else "deactivated 🚫"
+        await interaction.followup.send(
+            f"**{product['name']}** {status}", ephemeral=True)
 
-    async def deactivate_product(self, product_id: int) -> None:
-        await self.db.execute(
-            "UPDATE store_products SET active = 0, updated_at = ? WHERE id = ?",
-            (int(time.time()), product_id)
-        )
-        await self.db.commit()
-
-    def _row_to_product(self, row) -> dict:
-        return {
-            "id": row[0], "name": row[1], "description": row[2],
-            "price_cents": row[3], "currency": row[4],
-            "delivery_type": row[5], "delivery_data": json.loads(row[6]),
-            "active": bool(row[7]), "created_at": row[8], "updated_at": row[9],
-            "price_display": f"${row[3] / 100:.2f}",
-        }
-
-    # ── Orders ────────────────────────────────────────────────
-
-    async def create_order(self, user_id: int, product_id: int) -> dict:
-        product = await self.get_product(product_id)
-        if not product or not product["active"]:
-            raise ProductNotFoundError("❌ That product isn't available.")
-        now = int(time.time())
-        async with self.db.execute(
-            "INSERT INTO store_orders (user_id, product_id, amount_cents, currency, "
-            "status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, product_id, product["price_cents"], product["currency"],
-             ORDER_PENDING, now)
-        ) as cur:
-            order_id = cur.lastrowid
-        await self.db.commit()
-        return await self.get_order(order_id)
-
-    async def get_order(self, order_id: int) -> dict | None:
-        async with self.db.execute(
-            "SELECT o.id, o.user_id, o.product_id, o.stripe_session_id, "
-            "o.stripe_payment_intent, o.amount_cents, o.currency, o.status, "
-            "o.created_at, o.paid_at, p.name as product_name "
-            "FROM store_orders o JOIN store_products p ON p.id = o.product_id "
-            "WHERE o.id = ?", (order_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return self._row_to_order(row)
-
-    async def get_order_by_session(self, stripe_session_id: str) -> dict | None:
-        async with self.db.execute(
-            "SELECT o.id, o.user_id, o.product_id, o.stripe_session_id, "
-            "o.stripe_payment_intent, o.amount_cents, o.currency, o.status, "
-            "o.created_at, o.paid_at, p.name as product_name "
-            "FROM store_orders o JOIN store_products p ON p.id = o.product_id "
-            "WHERE o.stripe_session_id = ?", (stripe_session_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return self._row_to_order(row)
-
-    async def get_user_orders(self, user_id: int, limit: int = 20) -> list[dict]:
-        async with self.db.execute(
-            "SELECT o.id, o.user_id, o.product_id, o.stripe_session_id, "
-            "o.stripe_payment_intent, o.amount_cents, o.currency, o.status, "
-            "o.created_at, o.paid_at, p.name as product_name "
-            "FROM store_orders o JOIN store_products p ON p.id = o.product_id "
-            "WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT ?",
-            (user_id, limit)
-        ) as cur:
-            rows = await cur.fetchall()
-        return [self._row_to_order(r) for r in rows]
-
-    async def set_order_session(self, order_id: int, stripe_session_id: str) -> None:
-        await self.db.execute(
-            "UPDATE store_orders SET stripe_session_id = ? WHERE id = ?",
-            (stripe_session_id, order_id)
-        )
-        await self.db.commit()
-
-    async def mark_paid(self, order_id: int, stripe_payment_intent: str | None = None) -> dict:
-        now = int(time.time())
-        await self.db.execute(
-            "UPDATE store_orders SET status = ?, paid_at = ?, "
-            "stripe_payment_intent = COALESCE(?, stripe_payment_intent) "
-            "WHERE id = ?",
-            (ORDER_PAID, now, stripe_payment_intent, order_id)
-        )
-        # Create pending delivery record
-        order = await self.get_order(order_id)
-        product = await self.get_product(order["product_id"])
-        await self.db.execute(
-            "INSERT OR IGNORE INTO store_deliveries (order_id, delivery_type, status) "
-            "VALUES (?, ?, ?)",
-            (order_id, product["delivery_type"], DELIVERY_PENDING)
-        )
-        await self.db.commit()
-        return await self.get_order(order_id)
-
-    async def mark_failed(self, order_id: int) -> None:
-        await self.db.execute(
-            "UPDATE store_orders SET status = ? WHERE id = ?",
-            (ORDER_FAILED, order_id)
-        )
-        await self.db.commit()
-
-    async def mark_refunded(self, order_id: int) -> None:
-        await self.db.execute(
-            "UPDATE store_orders SET status = ? WHERE id = ?",
-            (ORDER_REFUNDED, order_id)
-        )
-        await self.db.commit()
-
-    def _row_to_order(self, row) -> dict:
-        return {
-            "id": row[0], "user_id": row[1], "product_id": row[2],
-            "stripe_session_id": row[3], "stripe_payment_intent": row[4],
-            "amount_cents": row[5], "currency": row[6], "status": row[7],
-            "created_at": row[8], "paid_at": row[9], "product_name": row[10],
-            "amount_display": f"${row[5] / 100:.2f}",
-        }
-
-    # ── Deliveries ────────────────────────────────────────────
-
-    async def get_pending_deliveries(self, limit: int = 50) -> list[dict]:
-        async with self.db.execute(
-            "SELECT d.id, d.order_id, d.delivery_type, d.status, d.attempts, "
-            "d.last_attempt_at, d.delivered_at, d.details, "
-            "o.user_id, o.product_id, p.name as product_name, "
-            "p.delivery_data "
-            "FROM store_deliveries d "
-            "JOIN store_orders o ON o.id = d.order_id "
-            "JOIN store_products p ON p.id = o.product_id "
-            "WHERE d.status = ? ORDER BY d.id ASC LIMIT ?",
-            (DELIVERY_PENDING, limit)
-        ) as cur:
-            rows = await cur.fetchall()
-        return [{
-            "id": r[0], "order_id": r[1], "delivery_type": r[2],
-            "status": r[3], "attempts": r[4], "last_attempt_at": r[5],
-            "delivered_at": r[6], "details": json.loads(r[7]),
-            "user_id": r[8], "product_id": r[9], "product_name": r[10],
-            "delivery_data": json.loads(r[11]),
-        } for r in rows]
-
-    async def record_delivery_attempt(self, delivery_id: int,
-                                     success: bool,
-                                     details: dict | None = None) -> None:
-        now = int(time.time())
-        if success:
-            await self.db.execute(
-                "UPDATE store_deliveries SET status = ?, delivered_at = ?, "
-                "attempts = attempts + 1, last_attempt_at = ?, details = ? "
-                "WHERE id = ?",
-                (DELIVERY_DELIVERED, now, now,
-                 json.dumps(details or {}), delivery_id)
+    @store_admin.command(name="pending", description="View pending deliveries")
+    async def admin_pending(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        store = _store(self.bot)
+        pending = await store.get_pending_deliveries(20)
+        if not pending:
+            await interaction.followup.send(
+                "✅ No pending deliveries!", ephemeral=True)
+            return
+        lines = []
+        for d in pending:
+            lines.append(
+                f"📦 Order `#{d['order_id']}` — **{d['product_name']}** "
+                f"(<@{d['user_id']}>) — {d['delivery_type']} "
+                f"({d['attempts']} attempts)"
             )
-        else:
-            await self.db.execute(
-                "UPDATE store_deliveries SET attempts = attempts + 1, "
-                "last_attempt_at = ?, details = ? WHERE id = ?",
-                (now, json.dumps(details or {}), delivery_id)
-            )
-        await self.db.commit()
+        embed = discord.Embed(
+            title="📦 Pending Deliveries",
+            description="\n".join(lines),
+            color=0xFF9800,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-    async def get_delivery_for_order(self, order_id: int) -> dict | None:
-        async with self.db.execute(
-            "SELECT id, order_id, delivery_type, status, attempts, "
-            "last_attempt_at, delivered_at, details "
-            "FROM store_deliveries WHERE order_id = ?", (order_id,)
-        ) as cur:
-            row = await cur.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0], "order_id": row[1], "delivery_type": row[2],
-            "status": row[3], "attempts": row[4],
-            "last_attempt_at": row[5], "delivered_at": row[6],
-            "details": json.loads(row[7]),
-        }
+
+async def setup(bot: commands.Bot):
+    store = StoreService(bot.economy.db)
+    await store.init()
+    bot.store = store
+    await bot.add_cog(Store(bot))
