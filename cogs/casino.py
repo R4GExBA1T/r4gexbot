@@ -401,19 +401,26 @@ class Casino(commands.Cog):
     # -- crash ------------------------------------------------------------
 
     @app_commands.command(name="crash", description="Ride the multiplier — cash out before it crashes")
-    @app_commands.describe(bet="How much Scrap to bet", cashout="Auto cash-out multiplier (e.g. 2.0)")
+    @app_commands.describe(bet="How much Scrap to bet",
+                           cashout="Multiplier to cash out at — 2.0 doubles your bet, 1.5 = 50% profit")
     async def crash(self, interaction: discord.Interaction, bet: int, cashout: float):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
             return
         if cashout < 1.01:
             await interaction.followup.send(
-                "❌ Cash-out must be at least 1.01x.", ephemeral=True
+                "❌ Cash-out must be at least **1.01x**.", ephemeral=True
             )
-            # Refund since we already took the bet.
             await _economy(self.bot).add_scrap(interaction.user.id, bet)
             return
-        cashout = round(min(cashout, 100.0), 2)
+        if cashout > 1000:
+            await interaction.followup.send(
+                "❌ Cash-out can't exceed **1000x**. Try something like 2.0.",
+                ephemeral=True,
+            )
+            await _economy(self.bot).add_scrap(interaction.user.id, bet)
+            return
+        cashout = round(cashout, 2)
 
         point = roll_crash_point()
         econ = _economy(self.bot)
@@ -422,12 +429,12 @@ class Casino(commands.Cog):
             await econ.add_scrap(interaction.user.id, winnings)
             msg = (
                 f"🚀 Cashed out at **{cashout:.2f}x**!\n"
-                f"You win **{winnings - bet}** Scrap (total **{winnings}**)."
+                f"Bet **{bet}** → win **{winnings - bet}** Scrap (total **{winnings}**)."
             )
             color = 0x50FF8C
         else:
             msg = (
-                f"💥 **CRASHED at {point:.2f}x!**\n"
+                f"💥 **CRASHED at {point:.2f}x!** (aiming for {cashout:.2f}x)\n"
                 f"You lose **{bet}** Scrap."
             )
             color = 0xFF4646
