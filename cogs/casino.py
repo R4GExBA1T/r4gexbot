@@ -628,7 +628,7 @@ class HiLoView(discord.ui.View):
 
         if correct:
             self.streak += 1
-            self.multiplier *= 1.25
+            self.multiplier *= 1.4
             self.current_card = new
             embed, file = self._render()
             direction = "higher ⬆️" if guess_high else "lower ⬇️"
