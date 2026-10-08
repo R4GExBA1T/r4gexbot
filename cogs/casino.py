@@ -236,8 +236,6 @@ class Casino(commands.Cog):
 
     # -- slots ----------------------------------------------------------
 
-    @app_commands.command(name="slots", description="Spin the 3-reel slot machine")
-    @app_commands.describe(bet="How much Scrap to bet")
     async def slots(self, interaction: discord.Interaction, bet: int):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -275,8 +273,6 @@ class Casino(commands.Cog):
 
     # -- blackjack ------------------------------------------------------
 
-    @app_commands.command(name="blackjack", description="Play blackjack vs the dealer (pays 3:2)")
-    @app_commands.describe(bet="How much Scrap to bet")
     async def blackjack(self, interaction: discord.Interaction, bet: int):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -311,8 +307,6 @@ class Casino(commands.Cog):
 
     # -- roulette ---------------------------------------------------------
 
-    @app_commands.command(name="roulette", description="European roulette: bet red/black, odd/even, or a number 0-36")
-    @app_commands.describe(bet="How much Scrap to bet", choice='"red", "black", "odd", "even", or a number 0-36')
     async def roulette(self, interaction: discord.Interaction, bet: int, choice: str):
         await interaction.response.defer()
         choice = choice.strip().lower()
@@ -387,14 +381,7 @@ class Casino(commands.Cog):
 
     # -- coinflip ---------------------------------------------------------
 
-    @app_commands.command(name="coinflip", description="Flip a coin, double or nothing")
     @app_commands.describe(bet="How much Scrap to bet")
-    @app_commands.choices(
-        side=[
-            app_commands.Choice(name="Heads", value="heads"),
-            app_commands.Choice(name="Tails", value="tails"),
-        ]
-    )
     async def coinflip(self, interaction: discord.Interaction, bet: int, side: str):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -420,9 +407,6 @@ class Casino(commands.Cog):
 
     # -- crash ------------------------------------------------------------
 
-    @app_commands.command(name="crash", description="Ride the multiplier — cash out before it crashes")
-    @app_commands.describe(bet="How much Scrap to bet",
-                           cashout="Multiplier to cash out at — 2.0 doubles your bet, 1.5 = 50% profit")
     async def crash(self, interaction: discord.Interaction, bet: int, cashout: float):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -474,8 +458,6 @@ class Casino(commands.Cog):
 
     # -- mines ------------------------------------------------------------
 
-    @app_commands.command(name="mines", description="Reveal tiles, dodge the mines, cash out anytime")
-    @app_commands.describe(bet="How much Scrap to bet", mines="Number of mines (1-10)")
     async def mines(self, interaction: discord.Interaction, bet: int, mines: int):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -509,15 +491,9 @@ class Casino(commands.Cog):
 
 
 
-    @app_commands.command(name="plinko", description="Drop the chrome ball down the pegs")
     @app_commands.describe(bet="How much Scrap to bet (per ball)",
                            risk="Risk level — higher risk, bigger edge multipliers",
                            balls="How many balls to drop (1-3)")
-    @app_commands.choices(risk=[
-        app_commands.Choice(name="🟢 Low", value="low"),
-        app_commands.Choice(name="🟡 Medium", value="medium"),
-        app_commands.Choice(name="🔴 High", value="high"),
-    ])
     async def plinko(self, interaction: discord.Interaction, bet: int,
                      risk: app_commands.Choice[str], balls: int = 1):
         await interaction.response.defer()
@@ -566,8 +542,6 @@ class Casino(commands.Cog):
 
     # -- hi-lo ------------------------------------------------------------
 
-    @app_commands.command(name="hilo", description="Guess higher or lower, build your streak")
-    @app_commands.describe(bet="How much Scrap to bet")
     async def hilo(self, interaction: discord.Interaction, bet: int):
         await interaction.response.defer()
         if not await self._take_bet(interaction, bet):
@@ -952,11 +926,11 @@ class GambleBetModal(discord.ui.Modal):
         # (the game commands defer the interaction themselves)
         if game in ("slots", "blackjack", "hilo"):
             if game == "slots":
-                await casino.slots.callback(casino, interaction, bet)
+                await casino.slots( interaction, bet)
             elif game == "blackjack":
-                await casino.blackjack.callback(casino, interaction, bet)
+                await casino.blackjack( interaction, bet)
             elif game == "hilo":
-                await casino.hilo.callback(casino, interaction, bet)
+                await casino.hilo( interaction, bet)
             return
 
         # Games needing a choice: show follow-up buttons
@@ -1000,7 +974,7 @@ class GambleRouletteChoice(discord.ui.View):
     async def _play(self, interaction: discord.Interaction, choice: str):
         for child in self.children:
             child.disabled = True
-        await self.casino.roulette.callback(self.casino, interaction, self.bet, choice)
+        await self.casino.roulette( interaction, self.bet, choice)
         self.stop()
 
     @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.danger, row=0)
@@ -1042,7 +1016,7 @@ class GambleRouletteNumberSelect(discord.ui.Select):
         view: GambleRouletteChoice = self.view
         for child in view.children:
             child.disabled = True
-        await view.casino.roulette.callback(view.casino, interaction, view.bet, choice)
+        await view.casino.roulette( interaction, view.bet, choice)
         view.stop()
 
 
@@ -1056,14 +1030,14 @@ class GambleCoinflipChoice(discord.ui.View):
     async def heads(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
-        await self.casino.coinflip.callback(self.casino, interaction, self.bet, "heads")
+        await self.casino.coinflip( interaction, self.bet, "heads")
         self.stop()
 
     @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
     async def tails(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
-        await self.casino.coinflip.callback(self.casino, interaction, self.bet, "tails")
+        await self.casino.coinflip( interaction, self.bet, "tails")
         self.stop()
 
 
@@ -1076,7 +1050,7 @@ class GambleCrashChoice(discord.ui.View):
     async def _pick(self, interaction: discord.Interaction, cashout: float):
         for child in self.children:
             child.disabled = True
-        await self.casino.crash.callback(self.casino, interaction, self.bet, cashout)
+        await self.casino.crash( interaction, self.bet, cashout)
         self.stop()
 
     @discord.ui.button(label="1.5x", style=discord.ButtonStyle.secondary)
@@ -1113,7 +1087,7 @@ class GambleMinesChoice(discord.ui.View):
     async def _pick(self, interaction: discord.Interaction, mines: int):
         for child in self.children:
             child.disabled = True
-        await self.casino.mines.callback(self.casino, interaction, self.bet, mines)
+        await self.casino.mines( interaction, self.bet, mines)
         self.stop()
 
     @discord.ui.button(label="1 mine", style=discord.ButtonStyle.secondary)
@@ -1149,8 +1123,8 @@ class GamblePlinkoChoice(discord.ui.View):
             name={"low": "🟢 Low", "medium": "🟡 Medium", "high": "🔴 High"}[self.risk],
             value=self.risk,
         )
-        await self.casino.plinko.callback(
-            self.casino, interaction, self.bet, risk_choice, balls)
+        await self.casino.plinko(
+            interaction, self.bet, risk_choice, balls)
         self.stop()
 
     @discord.ui.button(label="🟢 Low", style=discord.ButtonStyle.success, row=0)
