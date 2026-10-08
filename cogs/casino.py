@@ -563,6 +563,19 @@ class Casino(commands.Cog):
         await interaction.followup.send(embed=embed, view=view, file=file)
         view.message = await interaction.original_response()
 
+    # -- gamble menu --------------------------------------------------------
+
+    @app_commands.command(name="gamble", description="🎰 Pick a game from the menu — simple gambling")
+    async def gamble(self, interaction: discord.Interaction):
+        """Show a game picker menu for easy gambling."""
+        view = GambleMenu(self)
+        embed = discord.Embed(
+            title="🎰 Choose Your Game",
+            description="Pick a game below, then enter your bet.\nAll the classics, one simple menu.",
+            color=RUST_COLOR,
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
 
 class HiLoView(discord.ui.View):
     """Interactive Hi-Lo: guess higher/lower, cash out anytime."""
@@ -848,6 +861,222 @@ class MinesView(discord.ui.View):
         self.stop()
 
     # -- plinko -----------------------------------------------------------
+
+
+class GambleGameSelect(discord.ui.Select):
+    """Dropdown to pick which casino game to play."""
+
+    def __init__(self, casino: "Casino"):
+        self.casino = casino
+        options = [
+            discord.SelectOption(label="Slots", value="slots", emoji="🎰",
+                                 description="Spin the 3-reel slot machine"),
+            discord.SelectOption(label="Blackjack", value="blackjack", emoji="🃏",
+                                 description="Beat the dealer, pays 3:2"),
+            discord.SelectOption(label="Roulette", value="roulette", emoji="🎡",
+                                 description="Bet red/black or a number"),
+            discord.SelectOption(label="Coinflip", value="coinflip", emoji="🪙",
+                                 description="Heads or tails, double or nothing"),
+            discord.SelectOption(label="Crash", value="crash", emoji="📈",
+                                 description="Ride the multiplier, cash out in time"),
+            discord.SelectOption(label="Mines", value="mines", emoji="💣",
+                                 description="Dodge the mines, stack the multiplier"),
+            discord.SelectOption(label="Plinko", value="plinko", emoji="🎯",
+                                 description="Drop balls, hit big multipliers"),
+            discord.SelectOption(label="Hi-Lo", value="hilo", emoji="🔼",
+                                 description="Higher or lower? 1.4x per win"),
+        ]
+        super().__init__(placeholder="Pick a game...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        game = self.values[0]
+        # Show bet modal for the chosen game
+        modal = GambleBetModal(self.casino, game)
+        await interaction.response.send_modal(modal)
+
+
+class GambleMenu(discord.ui.View):
+    """Game picker menu for /gamble."""
+
+    def __init__(self, casino: "Casino"):
+        super().__init__(timeout=120)
+        self.add_item(GambleGameSelect(casino))
+
+
+class GambleBetModal(discord.ui.Modal):
+    """Bet amount input after picking a game."""
+
+    def __init__(self, casino: "Casino", game: str):
+        super().__init__(title=f"Bet on {game.title()}")
+        self.casino = casino
+        self.game = game
+        self.bet_input = discord.ui.TextInput(
+            label="Bet amount (Scrap)",
+            placeholder="e.g. 100",
+            required=True,
+            max_length=10,
+        )
+        self.add_item(self.bet_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            bet = int(self.bet_input.value.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Bet must be a whole number.", ephemeral=True)
+            return
+        if bet <= 0:
+            await interaction.response.send_message(
+                "❌ Bet must be positive.", ephemeral=True)
+            return
+
+        casino = self.casino
+        game = self.game
+
+        # Simple games: launch directly with just the bet
+        if game in ("slots", "blackjack", "hilo"):
+            await interaction.response.defer()
+            # Delegate to the existing command logic
+            if game == "slots":
+                await casino.slots.callback(casino, interaction, bet)
+            elif game == "blackjack":
+                await casino.blackjack.callback(casino, interaction, bet)
+            elif game == "hilo":
+                await casino.hilo.callback(casino, interaction, bet)
+            return
+
+        # Games needing a choice: show follow-up buttons
+        await interaction.response.defer(ephemeral=True)
+        if game == "roulette":
+            view = GambleRouletteChoice(casino, bet)
+            await interaction.followup.send(
+                f"🎡 **Roulette** — bet **{bet}** Scrap. Red or black?",
+                view=view, ephemeral=True)
+        elif game == "coinflip":
+            view = GambleCoinflipChoice(casino, bet)
+            await interaction.followup.send(
+                f"🪙 **Coinflip** — bet **{bet}** Scrap. Heads or tails?",
+                view=view, ephemeral=True)
+        elif game == "crash":
+            view = GambleCrashChoice(casino, bet)
+            await interaction.followup.send(
+                f"📈 **Crash** — bet **{bet}** Scrap. When to cash out?",
+                view=view, ephemeral=True)
+        elif game == "mines":
+            view = GambleMinesChoice(casino, bet)
+            await interaction.followup.send(
+                f"💣 **Mines** — bet **{bet}** Scrap. How many mines?",
+                view=view, ephemeral=True)
+        elif game == "plinko":
+            # Plinko defaults: medium risk, 1 ball — simple path
+            risk_choice = app_commands.Choice(name="Medium", value="medium")
+            await casino.plinko.callback(casino, interaction, bet, risk_choice, 1)
+
+
+class GambleRouletteChoice(discord.ui.View):
+    def __init__(self, casino: "Casino", bet: int):
+        super().__init__(timeout=60)
+        self.casino = casino
+        self.bet = bet
+
+    @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.danger)
+    async def red(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.roulette.callback(self.casino, interaction, self.bet, "red")
+        self.stop()
+
+    @discord.ui.button(label="⚫ Black", style=discord.ButtonStyle.secondary)
+    async def black(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.roulette.callback(self.casino, interaction, self.bet, "black")
+        self.stop()
+
+
+class GambleCoinflipChoice(discord.ui.View):
+    def __init__(self, casino: "Casino", bet: int):
+        super().__init__(timeout=60)
+        self.casino = casino
+        self.bet = bet
+
+    @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
+    async def heads(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.coinflip.callback(self.casino, interaction, self.bet, "heads")
+        self.stop()
+
+    @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
+    async def tails(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.coinflip.callback(self.casino, interaction, self.bet, "tails")
+        self.stop()
+
+
+class GambleCrashChoice(discord.ui.View):
+    def __init__(self, casino: "Casino", bet: int):
+        super().__init__(timeout=60)
+        self.casino = casino
+        self.bet = bet
+
+    async def _pick(self, interaction: discord.Interaction, cashout: float):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.crash.callback(self.casino, interaction, self.bet, cashout)
+        self.stop()
+
+    @discord.ui.button(label="1.5x", style=discord.ButtonStyle.secondary)
+    async def c15(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 1.5)
+
+    @discord.ui.button(label="2x", style=discord.ButtonStyle.primary)
+    async def c2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 2.0)
+
+    @discord.ui.button(label="5x", style=discord.ButtonStyle.danger)
+    async def c5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 5.0)
+
+    @discord.ui.button(label="10x", style=discord.ButtonStyle.danger)
+    async def c10(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 10.0)
+
+
+class GambleMinesChoice(discord.ui.View):
+    def __init__(self, casino: "Casino", bet: int):
+        super().__init__(timeout=60)
+        self.casino = casino
+        self.bet = bet
+
+    async def _pick(self, interaction: discord.Interaction, mines: int):
+        await interaction.response.defer()
+        for child in self.children:
+            child.disabled = True
+        await self.casino.mines.callback(self.casino, interaction, self.bet, mines)
+        self.stop()
+
+    @discord.ui.button(label="1 mine", style=discord.ButtonStyle.secondary)
+    async def m1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 1)
+
+    @discord.ui.button(label="3 mines", style=discord.ButtonStyle.primary)
+    async def m3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 3)
+
+    @discord.ui.button(label="5 mines", style=discord.ButtonStyle.danger)
+    async def m5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 5)
+
+    @discord.ui.button(label="10 mines", style=discord.ButtonStyle.danger)
+    async def m10(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 10)
 
 
 
