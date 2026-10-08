@@ -59,25 +59,6 @@ def _draw_card(rank: str, suit: str, face_down: bool = False) -> Image.Image:
     return card
 
 
-# Transparent background mode — set to False to use Discord's bg color instead.
-# Backup of the Discord-bg version: services/blackjack.py.discordbg-backup
-USE_TRANSPARENT_BG = True
-
-
-def _transparent_bg(img: Image.Image) -> Image.Image:
-    """Make the dark background surround transparent so the image blends
-    seamlessly into Discord's chat."""
-    import numpy as np
-    img = img.convert("RGBA")
-    arr = np.array(img)
-    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-    dark = (r < 55) & (g < 55) & (b < 55)
-    not_green = g < r + 20  # preserve the table felt
-    mask = dark & not_green
-    arr[mask, 3] = 0  # fully transparent
-    return Image.fromarray(arr)
-
-
 # Discord dark theme chat background — used to make game images blend in.
 DISCORD_BG = (49, 51, 56)  # #313338
 
@@ -103,12 +84,9 @@ def render_blackjack_table(player: list[str], dealer: list[str],
     """Render the blackjack table with cards. player/dealer are lists like
     ['A♠️', 'K♥️']. Returns PNG bytes."""
     table = Image.open(os.path.join(_ASSETS, "blackjack_table.png")).convert("RGB")
-    # Blend into Discord: transparent background (or Discord's bg color
-    # if USE_TRANSPARENT_BG is False) so the image looks seamless.
-    if USE_TRANSPARENT_BG:
-        table = _transparent_bg(table)
-    else:
-        table = _discord_bg(table)
+    # Blend into Discord: replace the pure-black surround with Discord's
+    # dark chat background (#313338) so the image looks seamless.
+    table = _discord_bg(table)
     W, H = table.size
 
     def parse(card_str: str) -> tuple[str, str]:
