@@ -97,9 +97,12 @@ class Economy(commands.Cog):
     @app_commands.command(name="vipspin", description="VIP perk: spin the wheel every hour")
     async def vipspin(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        if not any(r.name == VIP_ROLE_NAME for r in interaction.user.roles):
+        # VIP role name is configurable via /config
+        config_cog = self.bot.get_cog("Config")
+        vip_role = await config_cog.get(interaction.guild_id, "vip_role") if config_cog else VIP_ROLE_NAME
+        if not any(r.name == vip_role for r in interaction.user.roles):
             await interaction.followup.send(
-                f"👑 `/vipspin` is a **{VIP_ROLE_NAME}** perk — one free wheel spin every hour.",
+                f"👑 `/vipspin` is a **{vip_role}** perk — one free wheel spin every hour.",
                 ephemeral=True,
             )
             return
