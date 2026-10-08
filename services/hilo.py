@@ -14,6 +14,20 @@ RANK_VALUES = {r: i for i, r in enumerate(RANKS)}
 CARD_W, CARD_H = 140, 196
 
 
+def _transparent_bg(img: Image.Image) -> Image.Image:
+    """Make the dark background surround transparent so the image blends
+    seamlessly into Discord's chat."""
+    import numpy as np
+    img = img.convert("RGBA")
+    arr = np.array(img)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    dark = (r < 55) & (g < 55) & (b < 55)
+    not_green = g < r + 20  # preserve the table felt
+    mask = dark & not_green
+    arr[mask, 3] = 0  # fully transparent
+    return Image.fromarray(arr)
+
+
 def _font(size: int) -> ImageFont.FreeTypeFont:
     bundled = os.path.join(_ASSETS, "DejaVuSans-Bold.ttf")
     if os.path.exists(bundled):
@@ -75,8 +89,10 @@ def render_hilo_table(current_card: str, streak: int, multiplier: float,
     bg_path = os.path.join(_ASSETS, "hilo_bg.png")
     if os.path.exists(bg_path):
         table = Image.open(bg_path).convert("RGB").resize((W, H), Image.LANCZOS)
+        # Make the dark surround transparent so it blends into Discord.
+        table = _transparent_bg(table)
     else:
-        table = Image.new("RGB", (W, H), (20, 80, 40))
+        table = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(table)
 
     # Title with gold

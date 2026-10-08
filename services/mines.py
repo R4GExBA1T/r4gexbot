@@ -43,7 +43,8 @@ def render_mines_board(revealed: set[int], mines: set[int],
     mines: mine positions (only shown when game_over)."""
     back, safe, mine = _load_tiles()
     size = GRID * TILE + (GRID + 1) * GAP
-    board = Image.new("RGB", (size, size + 70), (10, 10, 12))
+    # Transparent background so it blends into Discord's chat.
+    board = Image.new("RGBA", (size, size + 70), (0, 0, 0, 0))
     d = ImageDraw.Draw(board)
 
     for idx in range(GRID * GRID):
