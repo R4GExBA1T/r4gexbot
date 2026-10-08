@@ -950,17 +950,13 @@ class GambleBetModal(discord.ui.Modal):
 
         # Simple games: launch directly with just the bet
         # (the game commands defer the interaction themselves)
-        if game in ("slots", "blackjack", "hilo", "plinko"):
+        if game in ("slots", "blackjack", "hilo"):
             if game == "slots":
                 await casino.slots.callback(casino, interaction, bet)
             elif game == "blackjack":
                 await casino.blackjack.callback(casino, interaction, bet)
             elif game == "hilo":
                 await casino.hilo.callback(casino, interaction, bet)
-            elif game == "plinko":
-                # Plinko defaults: medium risk, 1 ball — simple path
-                risk_choice = app_commands.Choice(name="🟡 Medium", value="medium")
-                await casino.plinko.callback(casino, interaction, bet, risk_choice, 1)
             return
 
         # Games needing a choice: show follow-up buttons
@@ -985,6 +981,11 @@ class GambleBetModal(discord.ui.Modal):
             await interaction.followup.send(
                 f"💣 **Mines** — bet **{bet}** Scrap. How many mines?",
                 view=view, ephemeral=True)
+        elif game == "plinko":
+            view = GamblePlinkoChoice(casino, bet)
+            await interaction.followup.send(
+                f"🎯 **Plinko** — bet **{bet}** Scrap per ball. Pick risk, then balls:",
+                view=view, ephemeral=True)
 
 
 class GambleRouletteChoice(discord.ui.View):
@@ -992,8 +993,9 @@ class GambleRouletteChoice(discord.ui.View):
         super().__init__(timeout=120)
         self.casino = casino
         self.bet = bet
-        # Add number select (0-36)
-        self.add_item(GambleRouletteNumberSelect(casino, bet))
+        # Add number selects (0-18 and 19-36, Discord max 25 options per select)
+        self.add_item(GambleRouletteNumberSelect(casino, bet, 0, 18, row=1))
+        self.add_item(GambleRouletteNumberSelect(casino, bet, 19, 36, row=2))
 
     async def _play(self, interaction: discord.Interaction, choice: str):
         for child in self.children:
@@ -1019,19 +1021,19 @@ class GambleRouletteChoice(discord.ui.View):
 
 
 class GambleRouletteNumberSelect(discord.ui.Select):
-    """Pick a specific number 0-36 for roulette."""
+    """Pick a specific number for roulette (split to stay under Discord's 25-option limit)."""
 
-    def __init__(self, casino: "Casino", bet: int):
+    def __init__(self, casino: "Casino", bet: int, low: int, high: int, row: int):
         self.casino = casino
         self.bet = bet
         options = [
             discord.SelectOption(label=str(n), value=str(n))
-            for n in range(37)
+            for n in range(low, high + 1)
         ]
         super().__init__(
-            placeholder="Or pick a specific number (0-36)...",
+            placeholder=f"Or pick a number ({low}-{high})...",
             options=options,
-            row=1,
+            row=row,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -1129,6 +1131,72 @@ class GambleMinesChoice(discord.ui.View):
     @discord.ui.button(label="10 mines", style=discord.ButtonStyle.danger)
     async def m10(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._pick(interaction, 10)
+
+
+class GamblePlinkoChoice(discord.ui.View):
+    """Pick risk level then ball count for plinko."""
+
+    def __init__(self, casino: "Casino", bet: int):
+        super().__init__(timeout=120)
+        self.casino = casino
+        self.bet = bet
+        self.risk: str | None = None
+
+    async def _play(self, interaction: discord.Interaction, balls: int):
+        for child in self.children:
+            child.disabled = True
+        risk_choice = app_commands.Choice(
+            name={"low": "🟢 Low", "medium": "🟡 Medium", "high": "🔴 High"}[self.risk],
+            value=self.risk,
+        )
+        await self.casino.plinko.callback(
+            self.casino, interaction, self.bet, risk_choice, balls)
+        self.stop()
+
+    @discord.ui.button(label="🟢 Low", style=discord.ButtonStyle.success, row=0)
+    async def low(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.risk = "low"
+        await interaction.response.edit_message(
+            content=f"🎯 **Plinko** — bet **{self.bet}** Scrap per ball. Risk: 🟢 Low. How many balls?",
+            view=self)
+
+    @discord.ui.button(label="🟡 Medium", style=discord.ButtonStyle.primary, row=0)
+    async def medium(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.risk = "medium"
+        await interaction.response.edit_message(
+            content=f"🎯 **Plinko** — bet **{self.bet}** Scrap per ball. Risk: 🟡 Medium. How many balls?",
+            view=self)
+
+    @discord.ui.button(label="🔴 High", style=discord.ButtonStyle.danger, row=0)
+    async def high(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.risk = "high"
+        await interaction.response.edit_message(
+            content=f"🎯 **Plinko** — bet **{self.bet}** Scrap per ball. Risk: 🔴 High. How many balls?",
+            view=self)
+
+    @discord.ui.button(label="1 ball", style=discord.ButtonStyle.secondary, row=1)
+    async def b1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.risk:
+            await interaction.response.send_message(
+                "Pick a risk level first!", ephemeral=True)
+            return
+        await self._play(interaction, 1)
+
+    @discord.ui.button(label="2 balls", style=discord.ButtonStyle.secondary, row=1)
+    async def b2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.risk:
+            await interaction.response.send_message(
+                "Pick a risk level first!", ephemeral=True)
+            return
+        await self._play(interaction, 2)
+
+    @discord.ui.button(label="3 balls", style=discord.ButtonStyle.secondary, row=1)
+    async def b3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.risk:
+            await interaction.response.send_message(
+                "Pick a risk level first!", ephemeral=True)
+            return
+        await self._play(interaction, 3)
 
 
 
