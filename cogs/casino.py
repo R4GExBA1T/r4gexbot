@@ -1034,13 +1034,21 @@ class GambleCrashChoice(discord.ui.View):
     async def c2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._pick(interaction, 2.0)
 
-    @discord.ui.button(label="5x", style=discord.ButtonStyle.danger)
-    async def c5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._pick(interaction, 5.0)
+    @discord.ui.button(label="2.5x", style=discord.ButtonStyle.primary)
+    async def c25(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 2.5)
 
-    @discord.ui.button(label="10x", style=discord.ButtonStyle.danger)
-    async def c10(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._pick(interaction, 10.0)
+    @discord.ui.button(label="3x", style=discord.ButtonStyle.primary)
+    async def c3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 3.0)
+
+    @discord.ui.button(label="3.5x", style=discord.ButtonStyle.danger)
+    async def c35(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 3.5)
+
+    @discord.ui.button(label="4x", style=discord.ButtonStyle.danger)
+    async def c4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, 4.0)
 
 
 class GambleMinesChoice(discord.ui.View):
