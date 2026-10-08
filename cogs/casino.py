@@ -311,19 +311,19 @@ class Casino(commands.Cog):
 
     # -- roulette ---------------------------------------------------------
 
-    @app_commands.command(name="roulette", description="European roulette: bet red/black or a number 0-36")
-    @app_commands.describe(bet="How much Scrap to bet", choice='"red", "black", or a number 0-36')
+    @app_commands.command(name="roulette", description="European roulette: bet red/black, odd/even, or a number 0-36")
+    @app_commands.describe(bet="How much Scrap to bet", choice='"red", "black", "odd", "even", or a number 0-36')
     async def roulette(self, interaction: discord.Interaction, bet: int, choice: str):
         await interaction.response.defer()
         choice = choice.strip().lower()
         number_choice: int | None = None
-        if choice in ("red", "black"):
+        if choice in ("red", "black", "odd", "even"):
             pass
         elif choice.isdigit() and 0 <= int(choice) <= 36:
             number_choice = int(choice)
         else:
             await interaction.followup.send(
-                '❌ Choice must be `"red"`, `"black"`, or a number 0–36.',
+                '❌ Choice must be `"red"`, `"black"`, `"odd"`, `"even"`, or a number 0–36.',
                 ephemeral=True,
             )
             return
@@ -347,6 +347,21 @@ class Casino(commands.Cog):
                 msg = (
                     f"🎡 The ball lands on {color_emoji} **{spin}**.\n"
                     f"Not {number_choice} — you lose **{bet}** Scrap."
+                )
+        elif choice in ("odd", "even"):
+            # 0 is neither odd nor even — house wins
+            is_odd = spin % 2 == 1
+            won = (choice == "odd" and is_odd) or (choice == "even" and not is_odd and spin != 0)
+            if won:
+                await econ.add_scrap(interaction.user.id, bet * 2)
+                msg = (
+                    f"🎡 The ball lands on {color_emoji} **{spin}** ({choice})!\n"
+                    f"You win **{bet}** Scrap."
+                )
+            else:
+                msg = (
+                    f"🎡 The ball lands on {color_emoji} **{spin}**.\n"
+                    f"Not {choice} — you lose **{bet}** Scrap."
                 )
         else:
             if color == choice:
@@ -935,13 +950,17 @@ class GambleBetModal(discord.ui.Modal):
 
         # Simple games: launch directly with just the bet
         # (the game commands defer the interaction themselves)
-        if game in ("slots", "blackjack", "hilo"):
+        if game in ("slots", "blackjack", "hilo", "plinko"):
             if game == "slots":
                 await casino.slots.callback(casino, interaction, bet)
             elif game == "blackjack":
                 await casino.blackjack.callback(casino, interaction, bet)
             elif game == "hilo":
                 await casino.hilo.callback(casino, interaction, bet)
+            elif game == "plinko":
+                # Plinko defaults: medium risk, 1 ball — simple path
+                risk_choice = app_commands.Choice(name="🟡 Medium", value="medium")
+                await casino.plinko.callback(casino, interaction, bet, risk_choice, 1)
             return
 
         # Games needing a choice: show follow-up buttons
@@ -949,7 +968,7 @@ class GambleBetModal(discord.ui.Modal):
         if game == "roulette":
             view = GambleRouletteChoice(casino, bet)
             await interaction.followup.send(
-                f"🎡 **Roulette** — bet **{bet}** Scrap. Red or black?",
+                f"🎡 **Roulette** — bet **{bet}** Scrap. Pick your bet:",
                 view=view, ephemeral=True)
         elif game == "coinflip":
             view = GambleCoinflipChoice(casino, bet)
@@ -966,31 +985,63 @@ class GambleBetModal(discord.ui.Modal):
             await interaction.followup.send(
                 f"💣 **Mines** — bet **{bet}** Scrap. How many mines?",
                 view=view, ephemeral=True)
-        elif game == "plinko":
-            # Plinko defaults: medium risk, 1 ball — simple path
-            risk_choice = app_commands.Choice(name="Medium", value="medium")
-            await casino.plinko.callback(casino, interaction, bet, risk_choice, 1)
 
 
 class GambleRouletteChoice(discord.ui.View):
     def __init__(self, casino: "Casino", bet: int):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)
         self.casino = casino
         self.bet = bet
+        # Add number select (0-36)
+        self.add_item(GambleRouletteNumberSelect(casino, bet))
 
-    @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.danger)
+    async def _play(self, interaction: discord.Interaction, choice: str):
+        for child in self.children:
+            child.disabled = True
+        await self.casino.roulette.callback(self.casino, interaction, self.bet, choice)
+        self.stop()
+
+    @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.danger, row=0)
     async def red(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        await self.casino.roulette.callback(self.casino, interaction, self.bet, "red")
-        self.stop()
+        await self._play(interaction, "red")
 
-    @discord.ui.button(label="⚫ Black", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="⚫ Black", style=discord.ButtonStyle.secondary, row=0)
     async def black(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
+        await self._play(interaction, "black")
+
+    @discord.ui.button(label="Odd", style=discord.ButtonStyle.primary, row=0)
+    async def odd(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._play(interaction, "odd")
+
+    @discord.ui.button(label="Even", style=discord.ButtonStyle.primary, row=0)
+    async def even(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._play(interaction, "even")
+
+
+class GambleRouletteNumberSelect(discord.ui.Select):
+    """Pick a specific number 0-36 for roulette."""
+
+    def __init__(self, casino: "Casino", bet: int):
+        self.casino = casino
+        self.bet = bet
+        options = [
+            discord.SelectOption(label=str(n), value=str(n))
+            for n in range(37)
+        ]
+        super().__init__(
+            placeholder="Or pick a specific number (0-36)...",
+            options=options,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        choice = self.values[0]
+        # Disable the parent view
+        view: GambleRouletteChoice = self.view
+        for child in view.children:
             child.disabled = True
-        await self.casino.roulette.callback(self.casino, interaction, self.bet, "black")
-        self.stop()
+        await view.casino.roulette.callback(view.casino, interaction, view.bet, choice)
+        view.stop()
 
 
 class GambleCoinflipChoice(discord.ui.View):
