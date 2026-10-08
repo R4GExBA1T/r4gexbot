@@ -934,9 +934,8 @@ class GambleBetModal(discord.ui.Modal):
         game = self.game
 
         # Simple games: launch directly with just the bet
+        # (the game commands defer the interaction themselves)
         if game in ("slots", "blackjack", "hilo"):
-            await interaction.response.defer()
-            # Delegate to the existing command logic
             if game == "slots":
                 await casino.slots.callback(casino, interaction, bet)
             elif game == "blackjack":
@@ -981,7 +980,6 @@ class GambleRouletteChoice(discord.ui.View):
 
     @discord.ui.button(label="🔴 Red", style=discord.ButtonStyle.danger)
     async def red(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.roulette.callback(self.casino, interaction, self.bet, "red")
@@ -989,7 +987,6 @@ class GambleRouletteChoice(discord.ui.View):
 
     @discord.ui.button(label="⚫ Black", style=discord.ButtonStyle.secondary)
     async def black(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.roulette.callback(self.casino, interaction, self.bet, "black")
@@ -1004,7 +1001,6 @@ class GambleCoinflipChoice(discord.ui.View):
 
     @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
     async def heads(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.coinflip.callback(self.casino, interaction, self.bet, "heads")
@@ -1012,7 +1008,6 @@ class GambleCoinflipChoice(discord.ui.View):
 
     @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
     async def tails(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.coinflip.callback(self.casino, interaction, self.bet, "tails")
@@ -1026,7 +1021,6 @@ class GambleCrashChoice(discord.ui.View):
         self.bet = bet
 
     async def _pick(self, interaction: discord.Interaction, cashout: float):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.crash.callback(self.casino, interaction, self.bet, cashout)
@@ -1056,7 +1050,6 @@ class GambleMinesChoice(discord.ui.View):
         self.bet = bet
 
     async def _pick(self, interaction: discord.Interaction, mines: int):
-        await interaction.response.defer()
         for child in self.children:
             child.disabled = True
         await self.casino.mines.callback(self.casino, interaction, self.bet, mines)
