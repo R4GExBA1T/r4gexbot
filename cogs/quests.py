@@ -126,23 +126,45 @@ class ClaimQuestsView(discord.ui.View):
         super().__init__(timeout=120)
         self.cog = cog
         self.quests = quests
+        self._claimed = False
 
     @discord.ui.button(label="🎁 Claim All Rewards", style=discord.ButtonStyle.success)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        # Prevent double-clicks
+        if self._claimed:
+            await interaction.response.send_message(
+                "❌ Already claimed!", ephemeral=True)
+            return
+        self._claimed = True
+        button.disabled = True
+        button.label = "✅ Claimed"
+        try:
+            await interaction.response.edit_message(view=self)
+        except:
+            pass
+
+        await interaction.followup.defer(ephemeral=True)
         total = 0
+        claimed_count = 0
         for q in self.quests:
-            # Mark claimed
             period = self.cog._period(q["type"])
-            await self.cog.bot.economy.db.execute(
-                "UPDATE quest_progress SET claimed = 1 WHERE user_id = ? AND quest_id = ? AND period = ?",
+            # Atomic check-and-set: only claim if not already claimed
+            cur = await self.cog.bot.economy.db.execute(
+                """UPDATE quest_progress SET claimed = 1
+                   WHERE user_id = ? AND quest_id = ? AND period = ? AND claimed = 0""",
                 (interaction.user.id, q["id"], period))
-            total += q["reward"]
+            if cur.rowcount > 0:
+                total += q["reward"]
+                claimed_count += 1
         await self.cog.bot.economy.db.commit()
-        # Award Scrap
-        await self.cog.bot.economy.add_scrap(interaction.user.id, total)
-        await interaction.followup.send(
-            f"🎉 Claimed **{total}** Scrap from {len(self.quests)} quest(s)!", ephemeral=True)
+
+        if claimed_count > 0:
+            await self.cog.bot.economy.add_scrap(interaction.user.id, total)
+            await interaction.followup.send(
+                f"🎉 Claimed **{total}** Scrap from {claimed_count} quest(s)!", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "❌ Nothing to claim — already claimed!", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
