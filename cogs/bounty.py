@@ -30,6 +30,10 @@ class Bounty(commands.Cog):
                    created_at TEXT)""")
         await self.bot.economy.db.commit()
 
+    def _is_admin(self, interaction: discord.Interaction) -> bool:
+        return (interaction.user.guild_permissions.administrator or
+                interaction.guild.owner_id == interaction.user.id)
+
     @app_commands.command(name="bounty", description="🎯 Bounty board — place bounties, hunt targets")
     @app_commands.describe(action="What to do",
                            target="Who to place the bounty on (for place)",
@@ -43,10 +47,6 @@ class Bounty(commands.Cog):
         app_commands.Choice(name="Cancel your bounty", value="cancel"),
         app_commands.Choice(name="Admin: View all (admin)", value="admin"),
     ])
-    def _is_admin(self, interaction: discord.Interaction) -> bool:
-        return (interaction.user.guild_permissions.administrator or
-                interaction.guild.owner_id == interaction.user.id)
-
     async def bounty(self, interaction: discord.Interaction,
                      action: str, target: discord.Member = None,
                      amount: int = 0, reason: str = "",
