@@ -1,134 +1,272 @@
-"""Server configuration: admins customize the bot through an interactive menu.
+"""Server configuration: super user-friendly admin panel.
 
-/config — opens the admin settings panel (no typing needed)
+/config — opens a guided settings experience any admin can use.
+Features: category buttons, visual setting cards, setup wizard, presets.
 """
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 RUST_COLOR = 0xCE6A2C
+GOLD = 0xFFD700
 
-# Setting definitions: key -> (friendly name, description, input hint)
+# (friendly name, plain-english explanation, example, is_numeric)
 SETTINGS = {
-    # Roles
-    "vip_role": ("VIP Role", "Role name that unlocks /vipspin", "e.g. VIP"),
-    "staff_role": ("Staff Role", "Role name for tickets & giveaways", "e.g. Staff"),
-    "thief_role": ("Heist Role", "Role name for the heist command", "e.g. Thief Princess👑"),
-    # Economy
-    "daily_min": ("Daily Min Prize", "Daily wheel minimum prize", "number, e.g. 10"),
-    "daily_max": ("Daily Max Prize", "Daily wheel max common prize", "number, e.g. 50"),
-    "daily_jackpot": ("Daily Jackpot", "Daily wheel jackpot prize", "number, e.g. 1000"),
-    "daily_cooldown_hours": ("Daily Cooldown", "Hours between daily spins", "number, e.g. 24"),
-    "vip_min": ("VIP Min Prize", "VIP wheel minimum prize", "number, e.g. 5"),
-    "vip_max": ("VIP Max Prize", "VIP wheel max common prize", "number, e.g. 20"),
-    "vip_jackpot": ("VIP Jackpot", "VIP wheel jackpot prize", "number, e.g. 300"),
-    "vip_cooldown_hours": ("VIP Cooldown", "Hours between VIP spins", "number, e.g. 1"),
-    "starting_scrap": ("Starting Scrap", "Scrap new users start with", "number, e.g. 100"),
-    # Casino
-    "min_bet": ("Min Bet", "Minimum casino bet", "number, e.g. 10"),
-    "max_bet": ("Max Bet", "Maximum casino bet (0 = no limit)", "number, e.g. 0"),
-    "hilo_multiplier": ("Hi-Lo Multiplier", "Per correct guess ×100 (140 = 1.4x)", "number, e.g. 140"),
-    "clan_cost": ("Clan Cost", "Scrap to create a clan", "number, e.g. 50"),
-    # Channels
-    "welcome_channel": ("Welcome Channel", "Channel ID for welcomes (0 = off)", "channel ID or 0"),
-    "log_channel": ("Log Channel", "Channel ID for mod logs (0 = off)", "channel ID or 0"),
+    "vip_role": ("👑 VIP Role",
+                 "Which role gets the hourly VIP wheel spin. Type the exact role name.",
+                 "VIP", False),
+    "staff_role": ("🛡️ Staff Role",
+                   "Which role can manage tickets and giveaways. Type the exact role name.",
+                   "Staff", False),
+    "thief_role": ("💰 Heist Role",
+                   "Which role can use the heist command. Type the exact role name.",
+                   "Thief Princess👑", False),
+    "daily_min": ("🎡 Daily Spin (Min)",
+                  "Smallest prize on the daily wheel. Everyone gets one spin per day.",
+                  "10", True),
+    "daily_max": ("🎡 Daily Spin (Max)",
+                  "Biggest common prize on the daily wheel (before jackpot).",
+                  "50", True),
+    "daily_jackpot": ("🎡 Daily Jackpot",
+                      "The rare big win on the daily wheel.",
+                      "1000", True),
+    "daily_cooldown_hours": ("⏰ Daily Cooldown",
+                             "Hours before someone can spin the daily wheel again.",
+                             "24", True),
+    "vip_min": ("⭐ VIP Spin (Min)",
+                "Smallest prize on the VIP hourly wheel.",
+                "5", True),
+    "vip_max": ("⭐ VIP Spin (Max)",
+                "Biggest common prize on the VIP wheel (before jackpot).",
+                "20", True),
+    "vip_jackpot": ("⭐ VIP Jackpot",
+                    "The rare big win on the VIP wheel.",
+                    "300", True),
+    "vip_cooldown_hours": ("⏰ VIP Cooldown",
+                           "Hours before a VIP can spin again.",
+                           "1", True),
+    "starting_scrap": ("🆕 Starting Scrap",
+                       "How much Scrap brand-new users start with.",
+                       "100", True),
+    "min_bet": ("🎰 Minimum Bet",
+                "Smallest bet allowed in casino games.",
+                "10", True),
+    "max_bet": ("🎰 Maximum Bet",
+                "Largest bet allowed (0 = no limit).",
+                "0", True),
+    "hilo_multiplier": ("🃏 Hi-Lo Multiplier",
+                        "Multiplier per correct guess ×100. 140 means 1.4x per win.",
+                        "140", True),
+    "clan_cost": ("🏰 Clan Cost",
+                  "How much Scrap it costs to create a clan.",
+                  "50", True),
+    "welcome_channel": ("👋 Welcome Channel",
+                        "Channel ID for welcome messages. 0 turns it off.\nRight-click a channel → Copy Channel ID (Developer Mode on).",
+                        "0", True),
+    "log_channel": ("📝 Log Channel",
+                    "Channel ID for moderation logs. 0 turns it off.",
+                    "0", True),
 }
 
-# Defaults
-DEFAULTS = {
-    "vip_role": "VIP", "staff_role": "Staff", "thief_role": "Thief Princess👑",
-    "daily_min": "10", "daily_max": "50", "daily_jackpot": "1000",
-    "daily_cooldown_hours": "24", "vip_min": "5", "vip_max": "20",
-    "vip_jackpot": "300", "vip_cooldown_hours": "1", "starting_scrap": "100",
-    "min_bet": "10", "max_bet": "0", "hilo_multiplier": "140", "clan_cost": "50",
-    "welcome_channel": "0", "log_channel": "0",
+DEFAULTS = {k: v[2] for k, v in SETTINGS.items()}
+
+CATEGORIES = {
+    "roles": ("👑 Roles", "Who gets special perks",
+              ["vip_role", "staff_role", "thief_role"]),
+    "economy": ("💰 Economy", "Wheel prizes, cooldowns & starting Scrap",
+                ["daily_min", "daily_max", "daily_jackpot", "daily_cooldown_hours",
+                 "vip_min", "vip_max", "vip_jackpot", "vip_cooldown_hours",
+                 "starting_scrap"]),
+    "casino": ("🎰 Casino", "Bet limits, multipliers & clan cost",
+               ["min_bet", "max_bet", "hilo_multiplier", "clan_cost"]),
+    "channels": ("📢 Channels", "Welcome messages & mod logs",
+                 ["welcome_channel", "log_channel"]),
 }
 
-# Groupings for the dropdown
-GROUPS = {
-    "👑 Roles": ["vip_role", "staff_role", "thief_role"],
-    "💰 Economy": ["daily_min", "daily_max", "daily_jackpot", "daily_cooldown_hours",
-                   "vip_min", "vip_max", "vip_jackpot", "vip_cooldown_hours",
-                   "starting_scrap"],
-    "🎰 Casino": ["min_bet", "max_bet", "hilo_multiplier", "clan_cost"],
-    "📢 Channels": ["welcome_channel", "log_channel"],
+# Quick-start presets for new servers
+PRESETS = {
+    "chill": ("😌 Chill Community",
+              "Generous rewards, relaxed limits. Great for growing a friendly server.",
+              {"daily_min": "25", "daily_max": "100", "daily_jackpot": "2000",
+               "vip_min": "10", "vip_max": "50", "vip_jackpot": "500",
+               "starting_scrap": "200", "min_bet": "5", "max_bet": "0",
+               "clan_cost": "25"}),
+    "balanced": ("⚖️ Balanced",
+                 "The defaults. Fair rewards, sensible limits.",
+                 {}),
+    "competitive": ("🔥 Competitive",
+                    "Lower rewards, higher stakes. For serious grinders.",
+                    {"daily_min": "5", "daily_max": "25", "daily_jackpot": "500",
+                     "vip_min": "5", "vip_max": "15", "vip_jackpot": "200",
+                     "starting_scrap": "50", "min_bet": "25", "max_bet": "5000",
+                     "hilo_multiplier": "130", "clan_cost": "100"}),
 }
 
 
 class SetValueModal(discord.ui.Modal):
-    """Modal to enter a new value for a setting."""
-
-    def __init__(self, cog: "Config", guild_id: int, key: str):
-        super().__init__(title=f"Set {SETTINGS[key][0]}")
+    def __init__(self, cog: "Config", guild_id: int, key: str, return_view=None):
+        friendly, expl, example, is_num = SETTINGS[key]
+        super().__init__(title=f"{friendly}")
         self.cog = cog
         self.guild_id = guild_id
         self.key = key
-        friendly, desc, hint = SETTINGS[key]
-        self.value_input = discord.ui.TextInput(
-            label=f"New value ({hint})",
-            placeholder=f"Current: {desc}",
+        self.return_view = return_view
+        self.input = discord.ui.TextInput(
+            label="New value",
+            placeholder=f"Example: {example}",
             required=True, max_length=100)
-        self.add_item(self.value_input)
+        self.add_item(self.input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        value = self.value_input.value.strip()
-        # Validate numbers for numeric settings
-        if self.key not in ("vip_role", "staff_role", "thief_role"):
+        value = self.input.value.strip()
+        _, _, _, is_num = SETTINGS[self.key]
+        if is_num:
             try:
                 int(value)
             except ValueError:
                 await interaction.response.send_message(
-                    f"❌ `{SETTINGS[self.key][0]}` needs a number.", ephemeral=True)
+                    "❌ That needs to be a whole number. Try again.", ephemeral=True)
                 return
         await self.cog.set_value(self.guild_id, self.key, value)
         friendly = SETTINGS[self.key][0]
         await interaction.response.send_message(
-            f"✅ **{friendly}** set to `{value}`.", ephemeral=True)
+            f"✅ {friendly} is now `{value}`.", ephemeral=True)
 
 
-class SettingSelect(discord.ui.Select):
-    """Dropdown to pick which setting to change."""
+class SettingButton(discord.ui.Button):
+    """One button per setting showing its current value."""
 
-    def __init__(self, cog: "Config", guild_id: int):
+    def __init__(self, cog: "Config", guild_id: int, key: str, current: str):
+        friendly, _, _, _ = SETTINGS[key]
+        super().__init__(
+            label=f"{friendly}: {current}",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"cfg_{key}")
         self.cog = cog
         self.guild_id = guild_id
-        options = []
-        for group_name, keys in GROUPS.items():
-            for key in keys:
-                friendly, desc, _ = SETTINGS[key]
-                options.append(discord.ui.SelectOption(
-                    label=friendly, value=key,
-                    description=desc[:100], emoji=group_name.split()[0]))
-        super().__init__(placeholder="Choose a setting to change...",
-                         options=options, min_values=1, max_values=1)
+        self.key = key
 
     async def callback(self, interaction: discord.Interaction):
-        key = self.values[0]
-        modal = SetValueModal(self.cog, self.guild_id, key)
-        await interaction.response.send_modal(modal)
+        friendly, expl, example, _ = SETTINGS[self.key]
+        current = await self.cog.get(self.guild_id, self.key)
+        em = discord.Embed(title=friendly, description=expl, color=RUST_COLOR)
+        em.add_field(name="Current value", value=f"`{current}`", inline=True)
+        em.add_field(name="Example", value=f"`{example}`", inline=True)
+
+        class ChangeView(discord.ui.View):
+            def __init__(self2):
+                super().__init__(timeout=120)
+
+            @discord.ui.button(label="✏️ Change", style=discord.ButtonStyle.primary)
+            async def change(self2, i2: discord.Interaction, b: discord.ui.Button):
+                await i2.response.send_modal(SetValueModal(self.cog, self.guild_id, self.key))
+
+        await interaction.response.send_message(embed=em, view=ChangeView(), ephemeral=True)
 
 
-class ConfigPanelView(discord.ui.View):
-    """Main config panel with buttons."""
+class CategoryView(discord.ui.View):
+    """Shows all settings in a category as buttons with live values."""
 
+    def __init__(self, cog: "Config", guild_id: int, cat_key: str):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.cat_key = cat_key
+
+    @classmethod
+    async def create(cls, cog: "Config", guild_id: int, cat_key: str):
+        view = cls(cog, guild_id, cat_key)
+        _, _, keys = CATEGORIES[cat_key]
+        for key in keys:
+            current = await cog.get(guild_id, key)
+            view.add_item(SettingButton(cog, guild_id, key, current))
+        return view
+
+    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        em, view = await self.cog.main_panel(self.guild_id)
+        await interaction.response.edit_message(embed=em, view=view)
+
+
+class PresetView(discord.ui.View):
     def __init__(self, cog: "Config", guild_id: int):
         super().__init__(timeout=300)
         self.cog = cog
         self.guild_id = guild_id
-        self.add_item(SettingSelect(cog, guild_id))
 
-    @discord.ui.button(label="👁️ View Settings", style=discord.ButtonStyle.secondary)
-    async def view_btn(self, interaction: discord.Interaction,
-                       button: discord.ui.Button):
-        em = await self.cog.build_view_embed(self.guild_id)
-        await interaction.response.send_message(embed=em, ephemeral=True)
+    @discord.ui.button(label="😌 Chill Community", style=discord.ButtonStyle.secondary)
+    async def chill(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._apply(i, "chill")
 
-    @discord.ui.button(label="🔄 Reset All", style=discord.ButtonStyle.danger)
-    async def reset_btn(self, interaction: discord.Interaction,
-                        button: discord.ui.Button):
-        await self.cog.reset_all(self.guild_id)
+    @discord.ui.button(label="⚖️ Balanced", style=discord.ButtonStyle.secondary)
+    async def balanced(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._apply(i, "balanced")
+
+    @discord.ui.button(label="🔥 Competitive", style=discord.ButtonStyle.secondary)
+    async def competitive(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._apply(i, "competitive")
+
+    async def _apply(self, interaction: discord.Interaction, preset_key: str):
+        name, desc, values = PRESETS[preset_key]
+        for k, v in values.items():
+            await self.cog.set_value(self.guild_id, k, v)
+        # Balanced = reset to defaults
+        if preset_key == "balanced":
+            await self.cog.reset_all(self.guild_id)
         await interaction.response.send_message(
-            "✅ All settings reset to defaults.", ephemeral=True)
+            f"✅ Applied preset **{name}**!\n{desc}", ephemeral=True)
+
+    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        em, view = await self.cog.main_panel(self.guild_id)
+        await interaction.response.edit_message(embed=em, view=view)
+
+
+class MainPanelView(discord.ui.View):
+    def __init__(self, cog: "Config", guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.guild_id = guild_id
+
+    @discord.ui.button(label="👑 Roles", style=discord.ButtonStyle.primary, row=0)
+    async def roles(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._open_category(i, "roles")
+
+    @discord.ui.button(label="💰 Economy", style=discord.ButtonStyle.primary, row=0)
+    async def economy(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._open_category(i, "economy")
+
+    @discord.ui.button(label="🎰 Casino", style=discord.ButtonStyle.primary, row=1)
+    async def casino(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._open_category(i, "casino")
+
+    @discord.ui.button(label="📢 Channels", style=discord.ButtonStyle.primary, row=1)
+    async def channels(self, i: discord.Interaction, b: discord.ui.Button):
+        await self._open_category(i, "channels")
+
+    @discord.ui.button(label="✨ Quick Setup", style=discord.ButtonStyle.success, row=2)
+    async def quick(self, i: discord.Interaction, b: discord.ui.Button):
+        em = discord.Embed(
+            title="✨ Quick Setup",
+            description=("Pick a preset and you're done! You can still tweak\n"
+                         "anything afterwards.\n\n" +
+                         "\n".join(f"**{n}**\n{PRESETS[k][1]}" for k, (n, _, _) in
+                                   [(k, PRESETS[k]) for k in PRESETS])),
+            color=GOLD)
+        await i.response.edit_message(embed=em, view=PresetView(self.cog, self.guild_id))
+
+    @discord.ui.button(label="🔄 Reset Everything", style=discord.ButtonStyle.danger, row=2)
+    async def reset(self, i: discord.Interaction, b: discord.ui.Button):
+        await self.cog.reset_all(self.guild_id)
+        await i.response.send_message("✅ Everything reset to defaults.", ephemeral=True)
+
+    async def _open_category(self, interaction: discord.Interaction, cat_key: str):
+        name, desc, _ = CATEGORIES[cat_key]
+        em = discord.Embed(
+            title=name, description=f"{desc}\n\nTap any setting to see what it does and change it.",
+            color=RUST_COLOR)
+        view = await CategoryView.create(self.cog, self.guild_id, cat_key)
+        await interaction.response.edit_message(embed=em, view=view)
 
 
 class Config(commands.Cog):
@@ -165,33 +303,25 @@ class Config(commands.Cog):
             "DELETE FROM guild_config WHERE guild_id = ?", (guild_id,))
         await self.bot.economy.db.commit()
 
-    async def build_view_embed(self, guild_id: int) -> discord.Embed:
-        em = discord.Embed(title="⚙️ Current Settings", color=RUST_COLOR)
-        for group_name, keys in GROUPS.items():
-            lines = []
-            for key in keys:
-                friendly = SETTINGS[key][0]
-                val = await self.get(guild_id, key)
-                lines.append(f"**{friendly}**: `{val}`")
-            em.add_field(name=group_name, value="\n".join(lines), inline=False)
-        return em
+    async def main_panel(self, guild_id: int):
+        em = discord.Embed(
+            title="⚙️ Bot Settings",
+            description=("Welcome! Tap a category below to customize the bot.\n"
+                         "Every setting explains itself — no guessing.\n\n"
+                         "🆕 **New here?** Hit **✨ Quick Setup** and pick a preset!"),
+            color=RUST_COLOR)
+        return em, MainPanelView(self, guild_id)
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
         return (interaction.user.guild_permissions.administrator or
                 interaction.guild.owner_id == interaction.user.id)
 
-    @app_commands.command(name="config", description="⚙️ Open the admin settings panel")
+    @app_commands.command(name="config", description="⚙️ Open the bot settings panel (admin)")
     async def config(self, interaction: discord.Interaction):
         if not self._is_admin(interaction):
-            await interaction.response.send_message(
-                "❌ Admin only.", ephemeral=True)
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
-        em = discord.Embed(
-            title="⚙️ Bot Settings",
-            description=("Pick a setting from the dropdown below to change it,\n"
-                         "or use the buttons to view all or reset."),
-            color=RUST_COLOR)
-        view = ConfigPanelView(self, interaction.guild_id)
+        em, view = await self.main_panel(interaction.guild_id)
         await interaction.response.send_message(embed=em, view=view, ephemeral=True)
 
 
