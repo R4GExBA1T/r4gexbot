@@ -68,6 +68,11 @@ class Economy(commands.Cog):
             await self._err(interaction, exc)
             return
 
+        # Track quest
+        quests = self.bot.get_cog("Quests")
+        if quests:
+            await quests.track(interaction.user.id, "spin_wheel")
+
         tier_lines = {
             "jackpot": "🎰 **JACKPOT!!** The wheel screams your name!",
             "rare": "💎 **RARE!** Big scrap haul!",

@@ -232,6 +232,11 @@ class Casino(commands.Cog):
         except EconomyError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return False
+        # Track quest progress
+        quests = self.bot.get_cog("Quests")
+        if quests:
+            await quests.track(interaction.user.id, "gamble_3")
+            await quests.track(interaction.user.id, "gamble_25")
         return True
 
     # -- slots ----------------------------------------------------------
