@@ -41,12 +41,43 @@ class Bounty(commands.Cog):
         app_commands.Choice(name="View board", value="board"),
         app_commands.Choice(name="Claim a bounty", value="claim"),
         app_commands.Choice(name="Cancel your bounty", value="cancel"),
+        app_commands.Choice(name="Admin: View all (admin)", value="admin"),
     ])
+    def _is_admin(self, interaction: discord.Interaction) -> bool:
+        return (interaction.user.guild_permissions.administrator or
+                interaction.guild.owner_id == interaction.user.id)
+
     async def bounty(self, interaction: discord.Interaction,
                      action: str, target: discord.Member = None,
                      amount: int = 0, reason: str = "",
                      bounty_id: int = 0):
         await interaction.response.defer()
+
+        if action == "admin":
+            if not self._is_admin(interaction):
+                await interaction.followup.send("❌ Admin only.", ephemeral=True)
+                return
+            cur = await self.bot.economy.db.execute(
+                """SELECT id, target_name, amount, reason, placer_name, placer_id, status
+                   FROM bounties WHERE guild_id = ?
+                   ORDER BY id DESC LIMIT 20""",
+                (interaction.guild_id,))
+            rows = await cur.fetchall()
+            if not rows:
+                await interaction.followup.send("📋 No bounties on record.", ephemeral=True)
+                return
+            em = discord.Embed(title="🎯 All Bounties (Admin View)",
+                               description="Every bounty with its ID — active, claimed, and cancelled",
+                               color=GOLD)
+            for bid, tname, amt, rsn, pname, pid, status in rows:
+                status_emoji = {"active": "🟢", "claimed": "✅", "cancelled": "❌"}.get(status, "❓")
+                em.add_field(
+                    name=f"{status_emoji} #{bid} — {tname} ({amt} Scrap) [{status}]",
+                    value=f"_{rsn}_\nPlaced by {pname} (`{pid}`)",
+                    inline=False)
+            em.set_footer(text="Admins can cancel any bounty with /bounty cancel + the ID")
+            await interaction.followup.send(embed=em, ephemeral=True)
+            return
 
         if action == "place":
             if not target:
@@ -152,8 +183,9 @@ class Bounty(commands.Cog):
                 await interaction.followup.send("❌ Bounty not found.", ephemeral=True)
                 return
             pid, amt, status = row
-            if pid != interaction.user.id:
-                await interaction.followup.send("❌ Only the placer can cancel.", ephemeral=True)
+            is_admin = self._is_admin(interaction)
+            if pid != interaction.user.id and not is_admin:
+                await interaction.followup.send("❌ Only the placer (or an admin) can cancel.", ephemeral=True)
                 return
             if status != "active":
                 await interaction.followup.send("❌ Already claimed.", ephemeral=True)
@@ -161,9 +193,10 @@ class Bounty(commands.Cog):
             await self.bot.economy.db.execute(
                 "UPDATE bounties SET status = 'cancelled' WHERE id = ?", (bounty_id,))
             await self.bot.economy.db.commit()
-            await self.bot.economy.add_scrap(interaction.user.id, amt)
+            # Refund goes to the original placer
+            await self.bot.economy.add_scrap(pid, amt)
             await interaction.followup.send(
-                f"✅ Bounty #{bounty_id} cancelled. **{amt}** Scrap refunded.",
+                f"✅ Bounty #{bounty_id} cancelled. **{amt}** Scrap refunded to placer.",
                 ephemeral=True)
 
 
