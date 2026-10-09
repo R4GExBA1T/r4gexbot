@@ -65,6 +65,7 @@ class Ximmy(commands.Bot):
         await self.load_extension("cogs.quests")
         await self.load_extension("cogs.bounty")
         await self.load_extension("cogs.wipe")
+        await self.load_extension("cogs.kits")
         # NOTE: Auto-sync disabled — commands are managed manually via API.
         # The safe auto-sync (copy_global_to + empty-payload guard) works
         # correctly and was used to register /clan on 2026-10-07. It can be
