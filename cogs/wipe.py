@@ -59,21 +59,27 @@ class Wipe(commands.Cog):
                             await self.bot.economy.db.commit()
                         continue
                     # Milestones: 7d, 3d, 1d, 12h, 6h, 1h, 30m, 10m
+                    # Post the MOST URGENT milestone we've reached (smallest threshold first)
                     milestones = [
-                        (timedelta(days=7), "7d", "📅 **7 days** until wipe!"),
-                        (timedelta(days=3), "3d", "📅 **3 days** until wipe!"),
-                        (timedelta(days=1), "1d", "📅 **24 hours** until wipe! Get your last raids in!"),
-                        (timedelta(hours=12), "12h", "⏰ **12 hours** until wipe!"),
-                        (timedelta(hours=6), "6h", "⏰ **6 hours** until wipe!"),
-                        (timedelta(hours=1), "1h", "⏰ **1 HOUR** until wipe! Final preparations!"),
-                        (timedelta(minutes=30), "30m", "🔥 **30 MINUTES** until wipe!"),
                         (timedelta(minutes=10), "10m", "🔥 **10 MINUTES** until wipe! Get to a safe spot!"),
+                        (timedelta(minutes=30), "30m", "🔥 **30 MINUTES** until wipe!"),
+                        (timedelta(hours=1), "1h", "⏰ **1 HOUR** until wipe! Final preparations!"),
+                        (timedelta(hours=6), "6h", "⏰ **6 hours** until wipe!"),
+                        (timedelta(hours=12), "12h", "⏰ **12 hours** until wipe!"),
+                        (timedelta(days=1), "1d", "📅 **24 hours** until wipe! Get your last raids in!"),
+                        (timedelta(days=3), "3d", "📅 **3 days** until wipe!"),
+                        (timedelta(days=7), "7d", "📅 **7 days** until wipe!"),
                     ]
                     for threshold, key, msg in milestones:
                         if delta <= threshold and (guild_id, key) not in posted:
                             await self._announce(guild_id, channel_id, msg)
                             posted.add((guild_id, key))
                             break
+                    # Mark all larger milestones as posted so we don't backfill
+                    # e.g. if wipe is 18h away, don't later post "7 days" or "3 days"
+                    for threshold, key, msg in milestones:
+                        if delta <= threshold:
+                            posted.add((guild_id, key))
             except Exception:
                 pass
             await asyncio.sleep(300)  # check every 5 min
