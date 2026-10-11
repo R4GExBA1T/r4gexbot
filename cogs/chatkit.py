@@ -80,24 +80,44 @@ class ChatKit(commands.Cog):
         if not message:
             return
 
-        # Rust RCON chat messages come through with
-        # "[CHAT] Gamertag : message" format in the Message field
         text = str(message)
-        if "[chat]" not in text.lower():
+        text_lower = text.lower()
+
+        # Match the trigger phrase anywhere in the message
+        # (covers typed chat, chat wheel, and various formats)
+        if "need wood" not in text_lower:
             return
 
-        # Extract gamertag and chat text: "[CHAT] Name : hello"
+        log.info(f"ChatKit: trigger phrase detected in: {text[:200]}")
+
+        # Try to extract gamertag from common formats:
+        # "[CHAT] Name : message" or "Name: message" etc.
+        gamertag = None
         try:
-            chat_part = text.split("[CHAT]", 1)[1].strip()
-            if " : " not in chat_part:
-                return
-            gamertag, chat_text = chat_part.split(" : ", 1)
-            gamertag = gamertag.strip()
-            chat_text = chat_text.strip().lower()
+            if "[CHAT]" in text:
+                chat_part = text.split("[CHAT]", 1)[1].strip()
+                # Remove any [xxxx] tags that might prefix the name
+                if " : " in chat_part:
+                    gamertag = chat_part.split(" : ", 1)[0].strip()
+            elif ":" in text:
+                # Fallback: "Name: need wood" format
+                potential = text.split(":", 1)[0].strip()
+                # Strip common log prefixes
+                for prefix in ["[SERVER]", "[RCON]"]:
+                    potential = potential.replace(prefix, "").strip()
+                if potential and len(potential) < 33:
+                    gamertag = potential
         except (IndexError, ValueError):
+            pass
+
+        if not gamertag:
+            log.warning(f"ChatKit: could not extract gamertag from: {text[:200]}")
             return
 
-        if TRIGGER_PHRASE not in chat_text:
+        # Clean gamertag of any remaining tags
+        import re
+        gamertag = re.sub(r'\[.*?\]', '', gamertag).strip()
+        if not gamertag:
             return
 
         await self._try_give_kit(gamertag)
@@ -129,6 +149,31 @@ class ChatKit(commands.Cog):
         from services import rcon as rcon_svc
         safe = text.replace('"', "'")
         await rcon_svc.send_command(f'say "{safe}"')
+
+    @discord.app_commands.command(name="rcon", description="🔧 Test RCON connection (admin)")
+    async def rcon_test(self, interaction: discord.Interaction):
+        """Admin-only: test if the bot can reach the game server via RCON."""
+        await interaction.response.defer(ephemeral=True)
+        if not (interaction.user.guild_permissions.administrator or
+                interaction.guild.owner_id == interaction.user.id):
+            await interaction.followup.send("❌ Admin only.", ephemeral=True)
+            return
+        from services import rcon as rcon_svc
+        if not rcon_svc.is_configured():
+            await interaction.followup.send(
+                "❌ RCON not configured (missing env vars).", ephemeral=True)
+            return
+        resp = await rcon_svc.send_command("server.hostname")
+        if resp is None:
+            await interaction.followup.send(
+                "❌ RCON connection failed. Server may be offline or unreachable.",
+                ephemeral=True)
+        else:
+            listener = "running" if self.chat_listener.is_running() else "stopped"
+            await interaction.followup.send(
+                f"✅ RCON connected! Server: {resp[:100]}\n"
+                f"Chat listener: {listener}",
+                ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
