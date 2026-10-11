@@ -25,13 +25,14 @@ class Kits(commands.Cog):
                    name TEXT PRIMARY KEY,
                    contents TEXT,
                    cooldown_hours INTEGER,
-                   created_by INTEGER)""")
-        # Add chat_trigger column if missing (for in-game chat triggers)
-        try:
+                   created_by INTEGER,
+                   chat_trigger TEXT)""")
+        # Migrate: add chat_trigger column if the table predates it
+        cur = await self.bot.economy.db.execute("PRAGMA table_info(kits)")
+        cols = [row[1] for row in await cur.fetchall()]
+        if "chat_trigger" not in cols:
             await self.bot.economy.db.execute(
                 "ALTER TABLE kits ADD COLUMN chat_trigger TEXT")
-        except Exception:
-            pass  # column already exists
         await self.bot.economy.db.execute(
             """CREATE TABLE IF NOT EXISTS kit_claims (
                    user_id INTEGER, kit_name TEXT,
@@ -39,12 +40,17 @@ class Kits(commands.Cog):
                    PRIMARY KEY (user_id, kit_name))""")
         await self.bot.economy.db.commit()
         # Seed/update the starter kit (the "I need wood" style auto-kit)
+        # Preserve any existing chat_trigger on the starter kit
+        cur = await self.bot.economy.db.execute(
+            "SELECT chat_trigger FROM kits WHERE name = 'starter'")
+        row = await cur.fetchone()
+        starter_trigger = (row[0] if row and row[0] else "i need wood")
         await self.bot.economy.db.execute(
             """INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by, chat_trigger)
                VALUES (?, ?, ?, ?, ?)""",
             ("starter",
              "Eoka Pistol x1, Handmade Shells x5, Bandage x6, Stone Pickaxe x1, Stone Axe x1, Low Grade Fuel x50",
-             0.5, 0, "i need wood"))
+             0.5, 0, starter_trigger))
         await self.bot.economy.db.commit()
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
@@ -72,13 +78,13 @@ class Kits(commands.Cog):
 
         if action == "list":
             cur = await self.bot.economy.db.execute(
-                "SELECT name, contents, cooldown_hours FROM kits ORDER BY name")
+                "SELECT name, contents, cooldown_hours, chat_trigger FROM kits ORDER BY name")
             rows = await cur.fetchall()
             if not rows:
                 await interaction.followup.send("📦 No kits yet!", ephemeral=True)
                 return
             em = discord.Embed(title="🎒 Available Kits", color=RUST_COLOR)
-            for kname, kcontents, cd in rows:
+            for kname, kcontents, cd, trig in rows:
                 # Check if user can claim (cooldown)
                 cur2 = await self.bot.economy.db.execute(
                     "SELECT claimed_at FROM kit_claims WHERE user_id = ? AND kit_name = ?",
@@ -94,9 +100,10 @@ class Kits(commands.Cog):
                         mins = int((remaining.total_seconds() % 3600) // 60)
                         status = f"⏳ {hrs}h {mins}m"
                 cd_display = f"{cd}h" if cd >= 1 else f"{int(cd * 60)}m"
+                trig_line = f"\n💬 Chat: \"{trig}\"" if trig else ""
                 em.add_field(
                     name=f"{kname} — {status}",
-                    value=f"{kcontents}\n_Cooldown: {cd_display}_",
+                    value=f"{kcontents}\n_Cooldown: {cd_display}_{trig_line}",
                     inline=False)
             em.set_footer(text="Use /kit claim <name> to claim!")
             await interaction.followup.send(embed=em)
@@ -165,9 +172,14 @@ class Kits(commands.Cog):
                     "❌ Give a name and contents! e.g. `/kit create name:starter cooldown_hours:24 contents:Wood x1000`",
                     ephemeral=True)
                 return
+            # Preserve existing chat_trigger if updating a kit
+            cur = await self.bot.economy.db.execute(
+                "SELECT chat_trigger FROM kits WHERE name = ?", (name.lower(),))
+            row = await cur.fetchone()
+            existing_trigger = row[0] if row else None
             await self.bot.economy.db.execute(
-                "INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by) VALUES (?, ?, ?, ?)",
-                (name.lower(), contents, max(1, cooldown_hours), interaction.user.id))
+                "INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by, chat_trigger) VALUES (?, ?, ?, ?, ?)",
+                (name.lower(), contents, max(1, cooldown_hours), interaction.user.id, existing_trigger))
             await self.bot.economy.db.commit()
             await interaction.followup.send(
                 f"✅ Kit `{name}` created! ({cooldown_hours}h cooldown)", ephemeral=True)
