@@ -168,12 +168,12 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
     sent = 0
     failed = 0
     for shortname, amount in items:
-        # inv.giveplayer splits large stacks; chunk at 1000
+        # inventory.giveto splits large stacks; chunk at 1000
         remaining = amount
         while remaining > 0:
             chunk = min(remaining, 1000)
             resp = await send_command(
-                f'inv.giveplayer "{gamertag}" {shortname} {chunk}')
+                f'inventory.giveto "{gamertag}" "{shortname}" "{chunk}"')
             if resp is None:
                 # Connection failed entirely
                 failed += 1
