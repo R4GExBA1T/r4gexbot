@@ -123,11 +123,26 @@ class Kits(commands.Cog):
                    VALUES (?, ?, ?)""",
                 (interaction.user.id, name.lower(), datetime.now(timezone.utc).isoformat()))
             await self.bot.economy.db.commit()
+
+            # Try in-game RCON delivery
+            from services import rcon as rcon_svc
+            delivery_note = "In-game delivery coming when server is linked! For now, show this to an admin."
+            if rcon_svc.is_configured():
+                gamertag = await self.bot.economy.get_gamertag(interaction.user.id)
+                if gamertag:
+                    ok, msg = await rcon_svc.give_kit(gamertag, contents)
+                    if ok:
+                        delivery_note = f"✅ Delivered in-game to **{gamertag}**! Check your inventory."
+                    else:
+                        delivery_note = f"⚠️ In-game delivery failed ({msg}). Show this to an admin."
+                else:
+                    delivery_note = "⚠️ Link your gamertag with `/linkrust` for in-game delivery! For now, show this to an admin."
+
             em = discord.Embed(
                 title=f"🎒 Kit Claimed: {name}",
                 description=f"**Contents:**\n{contents}",
                 color=0x57F287)
-            em.set_footer(text="In-game delivery coming when server is linked! For now, show this to an admin.")
+            em.set_footer(text=delivery_note)
             await interaction.followup.send(embed=em)
 
         elif action == "create":
