@@ -221,6 +221,57 @@ class ChatKit(commands.Cog):
             f"Playerlist: `{plist[:500] if plist else 'None'}`",
             ephemeral=True)
 
+    @discord.app_commands.command(name="chatdebug", description="🔧 Capture RCON chat for 30s (admin)")
+    async def chat_debug(self, interaction: discord.Interaction):
+        """Admin-only: listen to RCON for 30s and show what chat looks like."""
+        await interaction.response.defer(ephemeral=True)
+        if not (interaction.user.guild_permissions.administrator or
+                interaction.guild.owner_id == interaction.user.id):
+            await interaction.followup.send("❌ Admin only.", ephemeral=True)
+            return
+        from services import rcon as rcon_svc
+        if not rcon_svc.is_configured():
+            await interaction.followup.send("❌ RCON not configured.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            "🎧 Listening to RCON for 30s... type in game chat or use the chat wheel NOW!",
+            ephemeral=True)
+        try:
+            import websockets
+            import json
+            import asyncio
+            host = os.getenv("RCON_HOST")
+            port = os.getenv("RCON_PORT")
+            password = os.getenv("RCON_PASSWORD")
+            uri = f"ws://{host}:{port}/{password}"
+            messages = []
+            async with websockets.connect(uri, open_timeout=10) as ws:
+                try:
+                    async with asyncio.timeout(30):
+                        async for raw in ws:
+                            try:
+                                data = json.loads(raw)
+                                msg = str(data.get("Message", ""))[:200]
+                                if msg:
+                                    messages.append(msg)
+                                    # Keep only last 20
+                                    messages = messages[-20:]
+                            except:
+                                pass
+                except asyncio.TimeoutError:
+                    pass
+            if messages:
+                output = "\n".join(f"• `{m}`" for m in messages[-10:])
+                await interaction.followup.send(
+                    f"📨 Captured {len(messages)} messages:\n{output}",
+                    ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    "📭 No messages received in 30s. RCON might not be pushing chat.",
+                    ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ChatKit(bot))
