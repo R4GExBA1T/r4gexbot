@@ -165,7 +165,8 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
     if not items:
         return False, "No deliverable items found in kit."
 
-    delivered = 0
+    sent = 0
+    failed = 0
     for shortname, amount in items:
         # inv.giveplayer splits large stacks; chunk at 1000
         remaining = amount
@@ -174,8 +175,16 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
             resp = await send_command(
                 f'inv.giveplayer "{gamertag}" {shortname} {chunk}')
             if resp is None:
-                return False, "RCON connection failed."
-            delivered += 1
+                # Connection failed entirely
+                failed += 1
+                log.warning(f"RCON failed for {shortname} x{chunk} to {gamertag}")
+            else:
+                # Command was sent (empty response is normal for give commands)
+                sent += 1
             remaining -= chunk
 
+    if failed > 0 and sent == 0:
+        return False, "RCON connection failed - no items sent."
+    if failed > 0:
+        return True, f"Sent {sent} stacks to {gamertag} ({failed} failed)."
     return True, f"Delivered {len(items)} item types to {gamertag}."
