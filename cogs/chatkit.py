@@ -106,10 +106,21 @@ class ChatKit(commands.Cog):
         text = str(message)
         text_lower = text.lower()
 
+        # Normalize quick-chat wheel format:
+        # "[CHAT SERVER] Name : d11_quick_chat_i_need_phrase_format wood"
+        # -> treat as "i need wood"
+        normalized = text_lower
+        # Extract resource from quick chat pattern
+        import re
+        qc_match = re.search(r'quick_chat_i_need_phrase_format\s+(\w+)', text_lower)
+        if qc_match:
+            resource = qc_match.group(1)
+            normalized = f"i need {resource} {text_lower}"
+
         # Find which trigger phrase (if any) appears in this message
         matched = None
         for phrase in self._triggers:
-            if phrase in text_lower:
+            if phrase in normalized:
                 matched = phrase
                 break
         if not matched:
@@ -118,16 +129,24 @@ class ChatKit(commands.Cog):
         log.info(f"ChatKit: trigger '{matched}' detected in: {text[:200]}")
 
         # Extract gamertag from common formats
+        # "[CHAT SERVER] Name : message" or "[CHAT] Name : message"
         gamertag = None
         try:
-            if "[CHAT]" in text:
+            # Handle [CHAT SERVER] and [CHAT] prefixes
+            chat_part = None
+            if "[CHAT SERVER]" in text:
+                chat_part = text.split("[CHAT SERVER]", 1)[1].strip()
+            elif "[CHAT]" in text:
                 chat_part = text.split("[CHAT]", 1)[1].strip()
-                if " : " in chat_part:
-                    gamertag = chat_part.split(" : ", 1)[0].strip()
-            elif ":" in text:
-                potential = text.split(":", 1)[0].strip()
-                for prefix in ["[SERVER]", "[RCON]"]:
-                    potential = potential.replace(prefix, "").strip()
+                # Strip any remaining [TAG] prefix like "SERVER]"
+                chat_part = re.sub(r'^\[?[A-Z]+\]?\s*', '', chat_part).strip()
+                # Also handle "SERVER] Name" leftover
+                if chat_part.startswith("SERVER]"):
+                    chat_part = chat_part[7:].strip()
+            if chat_part and " : " in chat_part:
+                gamertag = chat_part.split(" : ", 1)[0].strip()
+            elif chat_part and ":" in chat_part:
+                potential = chat_part.split(":", 1)[0].strip()
                 if potential and len(potential) < 33:
                     gamertag = potential
         except (IndexError, ValueError):
