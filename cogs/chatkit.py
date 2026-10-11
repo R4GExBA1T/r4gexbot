@@ -213,7 +213,7 @@ class ChatKit(commands.Cog):
             return
         from services import rcon as rcon_svc
         # Try the give command and capture raw response
-        resp = await rcon_svc.send_command(f'inv.giveplayer "{gamertag}" bandage 1')
+        resp = await rcon_svc.send_command(f'inventory.giveto "{gamertag}" "bandage" "1"')
         # Also check playerlist to verify name
         plist = await rcon_svc.send_command("global.playerlist")
         await interaction.followup.send(
