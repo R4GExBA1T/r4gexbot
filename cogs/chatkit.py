@@ -203,6 +203,24 @@ class ChatKit(commands.Cog):
                 f"Active chat triggers: {trig_count}",
                 ephemeral=True)
 
+    @discord.app_commands.command(name="givetest", description="🔧 Test item delivery (admin)")
+    async def give_test(self, interaction: discord.Interaction, gamertag: str):
+        """Admin-only: try giving 1 bandage via RCON and show raw response."""
+        await interaction.response.defer(ephemeral=True)
+        if not (interaction.user.guild_permissions.administrator or
+                interaction.guild.owner_id == interaction.user.id):
+            await interaction.followup.send("❌ Admin only.", ephemeral=True)
+            return
+        from services import rcon as rcon_svc
+        # Try the give command and capture raw response
+        resp = await rcon_svc.send_command(f'inv.giveplayer "{gamertag}" bandage 1')
+        # Also check playerlist to verify name
+        plist = await rcon_svc.send_command("global.playerlist")
+        await interaction.followup.send(
+            f"Give response: `{resp}`\n"
+            f"Playerlist: `{plist[:500] if plist else 'None'}`",
+            ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ChatKit(bot))
