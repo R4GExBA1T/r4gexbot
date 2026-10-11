@@ -182,6 +182,8 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
                 # Command was sent (empty response is normal for give commands)
                 sent += 1
             remaining -= chunk
+            # Small delay to avoid overwhelming the server with rapid commands
+            await asyncio.sleep(0.5)
 
     if failed > 0 and sent == 0:
         return False, "RCON connection failed - no items sent."
