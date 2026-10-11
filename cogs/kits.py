@@ -32,13 +32,14 @@ class Kits(commands.Cog):
                    claimed_at TEXT,
                    PRIMARY KEY (user_id, kit_name))""")
         await self.bot.economy.db.commit()
-        # Seed a starter kit if none exist
-        cur = await self.bot.economy.db.execute("SELECT COUNT(*) FROM kits")
-        if (await cur.fetchone())[0] == 0:
-            await self.bot.economy.db.execute(
-                "INSERT INTO kits (name, contents, cooldown_hours, created_by) VALUES (?, ?, ?, ?)",
-                ("starter", "Wood x1000, Stone x500, Basic tools", 24, 0))
-            await self.bot.economy.db.commit()
+        # Seed/update the starter kit (the "I need wood" style auto-kit)
+        await self.bot.economy.db.execute(
+            """INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by)
+               VALUES (?, ?, ?, ?)""",
+            ("starter",
+             "Eoka Pistol x1, Handmade Shells x5, Bandage x6, Stone Pickaxe x1, Stone Axe x1, Low Grade Fuel x50",
+             0.5, 0))
+        await self.bot.economy.db.commit()
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
         return (interaction.user.guild_permissions.administrator or
@@ -83,9 +84,10 @@ class Kits(commands.Cog):
                         hrs = int(remaining.total_seconds() // 3600)
                         mins = int((remaining.total_seconds() % 3600) // 60)
                         status = f"⏳ {hrs}h {mins}m"
+                cd_display = f"{cd}h" if cd >= 1 else f"{int(cd * 60)}m"
                 em.add_field(
                     name=f"{kname} — {status}",
-                    value=f"{kcontents}\n_Cooldown: {cd}h_",
+                    value=f"{kcontents}\n_Cooldown: {cd_display}_",
                     inline=False)
             em.set_footer(text="Use /kit claim <name> to claim!")
             await interaction.followup.send(embed=em)
