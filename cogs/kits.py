@@ -51,6 +51,27 @@ class Kits(commands.Cog):
             ("starter",
              "Eoka Pistol x1, Handmade Shells x5, Bandage x6, Stone Pickaxe x1, Stone Axe x1, Low Grade Fuel x50",
              0.5, 0, starter_trigger))
+        # Seed the daily starter2 kit (24h cooldown, no chat trigger by default)
+        cur = await self.bot.economy.db.execute(
+            "SELECT chat_trigger FROM kits WHERE name = 'starter2'")
+        row = await cur.fetchone()
+        s2_trigger = (row[0] if row else None)
+        # Only seed if it doesn't exist yet (don't overwrite Tyson's changes)
+        if row is None:
+            await self.bot.economy.db.execute(
+                """INSERT INTO kits (name, contents, cooldown_hours, created_by, chat_trigger)
+                   VALUES (?, ?, ?, ?, ?)""",
+                ("starter2",
+                 "Double Barrel Shotgun x1, Crossbow x1, Handmade Shells x12, Arrows x30, Stims x2, Bandage x6, Wood x6000, Stone x6000, Metal Frags x3000, Low Grade Fuel x100, Jackhammer x1, Chainsaw x1",
+                 24, 0, None))
+        # Seed metal frags kit for "I need metal" wheel trigger (daily)
+        cur = await self.bot.economy.db.execute(
+            "SELECT name FROM kits WHERE name = 'metal'")
+        if await cur.fetchone() is None:
+            await self.bot.economy.db.execute(
+                """INSERT INTO kits (name, contents, cooldown_hours, created_by, chat_trigger)
+                   VALUES (?, ?, ?, ?, ?)""",
+                ("metal", "Metal Frags x3000", 24, 0, "need metal"))
         await self.bot.economy.db.commit()
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
