@@ -26,6 +26,12 @@ class Kits(commands.Cog):
                    contents TEXT,
                    cooldown_hours INTEGER,
                    created_by INTEGER)""")
+        # Add chat_trigger column if missing (for in-game chat triggers)
+        try:
+            await self.bot.economy.db.execute(
+                "ALTER TABLE kits ADD COLUMN chat_trigger TEXT")
+        except Exception:
+            pass  # column already exists
         await self.bot.economy.db.execute(
             """CREATE TABLE IF NOT EXISTS kit_claims (
                    user_id INTEGER, kit_name TEXT,
@@ -34,11 +40,11 @@ class Kits(commands.Cog):
         await self.bot.economy.db.commit()
         # Seed/update the starter kit (the "I need wood" style auto-kit)
         await self.bot.economy.db.execute(
-            """INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT OR REPLACE INTO kits (name, contents, cooldown_hours, created_by, chat_trigger)
+               VALUES (?, ?, ?, ?, ?)""",
             ("starter",
              "Eoka Pistol x1, Handmade Shells x5, Bandage x6, Stone Pickaxe x1, Stone Axe x1, Low Grade Fuel x50",
-             0.5, 0))
+             0.5, 0, "i need wood"))
         await self.bot.economy.db.commit()
 
     def _is_admin(self, interaction: discord.Interaction) -> bool:
@@ -49,16 +55,19 @@ class Kits(commands.Cog):
     @app_commands.describe(action="What to do",
                            name="Kit name",
                            cooldown_hours="Cooldown in hours (for create)",
-                           contents="What's in the kit (for create)")
+                           contents="What's in the kit (for create)",
+                           trigger="In-game chat phrase to trigger this kit (for trigger)")
     @app_commands.choices(action=[
         app_commands.Choice(name="List kits", value="list"),
         app_commands.Choice(name="Claim a kit", value="claim"),
         app_commands.Choice(name="Create kit (admin)", value="create"),
         app_commands.Choice(name="Delete kit (admin)", value="delete"),
+        app_commands.Choice(name="Set chat trigger (admin)", value="trigger"),
     ])
     async def kit(self, interaction: discord.Interaction,
                   action: str, name: str = "",
-                  cooldown_hours: int = 24, contents: str = ""):
+                  cooldown_hours: int = 24, contents: str = "",
+                  trigger: str = ""):
         await interaction.response.defer()
 
         if action == "list":
@@ -173,6 +182,31 @@ class Kits(commands.Cog):
             await self.bot.economy.db.execute("DELETE FROM kits WHERE name = ?", (name.lower(),))
             await self.bot.economy.db.commit()
             await interaction.followup.send(f"✅ Kit `{name}` deleted.", ephemeral=True)
+
+        elif action == "trigger":
+            if not self._is_admin(interaction):
+                await interaction.followup.send("❌ Admin only.", ephemeral=True)
+                return
+            if not name:
+                await interaction.followup.send("❌ Which kit? e.g. `/kit action:Set chat trigger name:vip trigger:i need stone`", ephemeral=True)
+                return
+            cur = await self.bot.economy.db.execute(
+                "SELECT name FROM kits WHERE name = ?", (name.lower(),))
+            if not await cur.fetchone():
+                await interaction.followup.send(f"❌ No kit named `{name}`.", ephemeral=True)
+                return
+            trig = trigger.strip().lower() if trigger else None
+            await self.bot.economy.db.execute(
+                "UPDATE kits SET chat_trigger = ? WHERE name = ?",
+                (trig, name.lower()))
+            await self.bot.economy.db.commit()
+            if trig:
+                await interaction.followup.send(
+                    f"✅ Kit `{name}` now triggers when someone types **\"{trigger.strip()}\"** in game chat.",
+                    ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"✅ Chat trigger removed from kit `{name}`.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
