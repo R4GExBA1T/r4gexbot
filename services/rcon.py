@@ -216,8 +216,8 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
                         failed += 1
                         log.warning(f"Kit: failed {shortname} x{chunk} to {gamertag}: {e}")
                     remaining -= chunk
-                    # Brief pause so the server processes each command in order
-                    await asyncio.sleep(0.3)
+                    # No artificial delay: the ack-read above already sequences
+                    # commands, so all items fire back-to-back and land together.
     except Exception as e:
         log.warning(f"Kit: RCON connection failed for {gamertag}: {e}")
         return False, "RCON connection failed - no items sent."
