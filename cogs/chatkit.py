@@ -136,33 +136,51 @@ class ChatKit(commands.Cog):
         text = str(message)
         text_lower = text.lower()
 
+        # Try to parse as inner JSON (structured chat format)
+        # {"Channel":0,"Message":"...","Username":"...","UserId":...}
+        inner_username = None
+        inner_message = None
+        if text.strip().startswith("{"):
+            try:
+                inner = json.loads(text)
+                if isinstance(inner, dict):
+                    inner_username = inner.get("Username")
+                    inner_message = inner.get("Message")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Use inner fields if available, otherwise fall back to text parsing
+        chat_text = str(inner_message) if inner_message else text
+        chat_text_lower = chat_text.lower()
+        gamertag = str(inner_username).strip() if inner_username else None
+
         # Forward to ZORP first (it handles its own phrase matching)
-        # Extract gamertag early for ZORP
-        zorp_gt = None
-        try:
-            m_p = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
-            if m_p:
-                cp = re.sub(r'^[A-Z]+\]\s*', '', m_p.group(1).strip()).strip()
-                if " : " in cp:
-                    zorp_gt = re.sub(r'\[.*?\]', '', cp.split(" : ", 1)[0]).strip() or None
-        except (IndexError, ValueError):
-            pass
-        if zorp_gt:
-            await self._forward_to_zorp(text, zorp_gt)
+        if gamertag:
+            await self._forward_to_zorp(chat_text, gamertag)
+        else:
+            # Fall back to extracting gamertag from [CHAT...] format for ZORP
+            zorp_gt = None
+            try:
+                m_p = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+                if m_p:
+                    cp = re.sub(r'^[A-Z]+\]\s*', '', m_p.group(1).strip()).strip()
+                    if " : " in cp:
+                        zorp_gt = re.sub(r'\[.*?\]', '', cp.split(" : ", 1)[0]).strip() or None
+            except (IndexError, ValueError):
+                pass
+            if zorp_gt:
+                await self._forward_to_zorp(text, zorp_gt)
 
         if not self._triggers:
             return
 
         # Normalize quick-chat wheel format:
-        # "[CHAT SERVER] Name : d11_quick_chat_i_need_phrase_format wood"
-        # -> treat as "i need wood"
-        normalized = text_lower
-        # Extract resource from quick chat pattern
-        import re
-        qc_match = re.search(r'quick_chat_i_need_phrase_format\s+(\w+)', text_lower)
+        # "d11_quick_chat_i_need_phrase_format wood" -> treat as "i need wood"
+        normalized = chat_text_lower
+        qc_match = re.search(r'quick_chat_i_need_phrase_format\s+(\w+)', chat_text_lower)
         if qc_match:
             resource = qc_match.group(1)
-            normalized = f"i need {resource} {text_lower}"
+            normalized = f"i need {resource} {chat_text_lower}"
 
         # Find which trigger phrase (if any) appears in this message
         matched = None
@@ -173,29 +191,26 @@ class ChatKit(commands.Cog):
         if not matched:
             return
 
-        log.info(f"ChatKit: trigger '{matched}' detected in: {text[:200]}")
+        log.info(f"ChatKit: trigger '{matched}' detected in: {chat_text[:200]}")
 
-        # Extract gamertag from common formats
+        # Extract gamertag if not already from JSON
         # "[CHAT SERVER] Name : message", "[CHAT LOCAL] Name : message",
         # "[CHAT TEAM] Name : message", or "[CHAT] Name : message"
-        gamertag = None
-        try:
-            # Handle all [CHAT ...] prefixes (SERVER, LOCAL, TEAM, or bare)
-            chat_part = None
-            m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
-            if m_prefix:
-                chat_part = m_prefix.group(1).strip()
-                # Strip leftover nested tag like "SERVER]" (only when a ] is present,
-                # so gamertags starting with uppercase letters are untouched)
-                chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
-            if chat_part and " : " in chat_part:
-                gamertag = chat_part.split(" : ", 1)[0].strip()
-            elif chat_part and ":" in chat_part:
-                potential = chat_part.split(":", 1)[0].strip()
-                if potential and len(potential) < 33:
-                    gamertag = potential
-        except (IndexError, ValueError):
-            pass
+        if not gamertag:
+            try:
+                chat_part = None
+                m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+                if m_prefix:
+                    chat_part = m_prefix.group(1).strip()
+                    chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
+                if chat_part and " : " in chat_part:
+                    gamertag = chat_part.split(" : ", 1)[0].strip()
+                elif chat_part and ":" in chat_part:
+                    potential = chat_part.split(":", 1)[0].strip()
+                    if potential and len(potential) < 33:
+                        gamertag = potential
+            except (IndexError, ValueError):
+                pass
 
         if not gamertag:
             log.warning(f"ChatKit: could not extract gamertag from: {text[:200]}")
