@@ -99,7 +99,7 @@ PRESETS = {
                     {"daily_min": "5", "daily_max": "25", "daily_jackpot": "500",
                      "vip_min": "5", "vip_max": "15", "vip_jackpot": "200",
                      "starting_scrap": "50", "min_bet": "25", "max_bet": "5000",
-                     "hilo_multiplier": "130", "clan_cost": "100"}),
+                     "hilo_multiplier": "140", "clan_cost": "100"}),
 }
 
 
