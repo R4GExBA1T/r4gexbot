@@ -107,7 +107,12 @@ class ChatKit(commands.Cog):
                         data = json.loads(raw)
                     except (json.JSONDecodeError, TypeError):
                         continue
-                    await self._handle_message(data)
+                    try:
+                        await self._handle_message(data)
+                    except Exception as e:
+                        # Never let a bad message kill the listener
+                        log.warning(f"ChatKit: message handler error: {e}")
+                        continue
         except Exception as e:
             log.warning(f"ChatKit: RCON connection lost ({e}), retrying in 5s")
             await asyncio.sleep(5)
@@ -195,25 +200,28 @@ class ChatKit(commands.Cog):
 
     async def _forward_to_zorp(self, text: str, gamertag: str | None) -> None:
         """Pass chat to the Zorp cog for wheel-phrase handling."""
-        zorp = self.bot.get_cog("Zorp")
-        if not zorp or not hasattr(zorp, "handle_chat"):
-            return
-        if not gamertag:
-            # Try to extract gamertag for ZORP even if kit parsing failed
-            try:
-                m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
-                if m_prefix:
-                    chat_part = m_prefix.group(1).strip()
-                    chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
-                    if " : " in chat_part:
-                        gamertag = chat_part.split(" : ", 1)[0].strip()
-                    elif ":" in chat_part:
-                        gamertag = chat_part.split(":", 1)[0].strip()
-                    gamertag = re.sub(r'\[.*?\]', '', gamertag).strip() or None
-            except (IndexError, ValueError):
-                pass
-        if gamertag:
-            await zorp.handle_chat(gamertag, text)
+        try:
+            zorp = self.bot.get_cog("Zorp")
+            if not zorp or not hasattr(zorp, "handle_chat"):
+                return
+            if not gamertag:
+                # Try to extract gamertag for ZORP even if kit parsing failed
+                try:
+                    m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+                    if m_prefix:
+                        chat_part = m_prefix.group(1).strip()
+                        chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
+                        if " : " in chat_part:
+                            gamertag = chat_part.split(" : ", 1)[0].strip()
+                        elif ":" in chat_part:
+                            gamertag = chat_part.split(":", 1)[0].strip()
+                        gamertag = re.sub(r'\[.*?\]', '', gamertag).strip() or None
+                except (IndexError, ValueError):
+                    pass
+            if gamertag:
+                await zorp.handle_chat(gamertag, text)
+        except Exception as e:
+            log.warning(f"ChatKit: ZORP forward failed: {e}")
 
     async def _try_give_kit(self, gamertag: str, kit_name: str,
                             contents: str, cd_hours: float) -> None:

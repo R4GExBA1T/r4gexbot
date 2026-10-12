@@ -193,45 +193,48 @@ class Zorp(commands.Cog):
         return ""
 
     async def handle_chat(self, gamertag: str, text: str) -> None:
-        """Handle a chat message from a player (called by ChatKit)."""
-        phrase = self._normalize_wheel(text)
-        if not phrase:
-            return
-        gt_lower = gamertag.lower()
-        log.info(f"ZORP: phrase '{phrase}' from {gamertag}")
-
-        if phrase == "can i build around here?":
-            self._pending[gt_lower] = datetime.now(timezone.utc)
-            try:
-                await rcon.send_command(
-                    f'say "{gamertag}, are you stood in the centre of your base? '
-                    f'Say YES on the chat wheel to create your ZORP, or GOODBYE to remove it."',
-                    timeout=10.0)
-            except Exception as e:
-                log.warning(f"ZORP: prompt failed: {e}")
-            return
-
-        if phrase == "yes":
-            if gt_lower not in self._pending:
+        """Handle a chat message from a player (called by ChatKit). Never throws."""
+        try:
+            phrase = self._normalize_wheel(text)
+            if not phrase:
                 return
-            del self._pending[gt_lower]
-            ok, msg = await self.create_zorp(gamertag)
-            try:
-                await rcon.send_command(f'say "{gamertag}: {msg}"', timeout=10.0)
-            except Exception:
-                pass
-            return
+            gt_lower = gamertag.lower()
+            log.info(f"ZORP: phrase '{phrase}' from {gamertag}")
 
-        if phrase == "goodbye":
-            if gt_lower in self._pending:
-                del self._pending[gt_lower]
-            ok, msg = await self.delete_zorp(gamertag)
-            if ok:
+            if phrase == "can i build around here?":
+                self._pending[gt_lower] = datetime.now(timezone.utc)
                 try:
+                    await rcon.send_command(
+                        f'say "{gamertag}, are you stood in the centre of your base? '
+                        f'Say YES on the chat wheel to create your ZORP, or GOODBYE to remove it."',
+                        timeout=10.0)
+                except Exception as e:
+                    log.warning(f"ZORP: prompt failed: {e}")
+                return
+
+            if phrase == "yes":
+                if gt_lower not in self._pending:
+                    return
+                del self._pending[gt_lower]
+                try:
+                    ok, msg = await self.create_zorp(gamertag)
                     await rcon.send_command(f'say "{gamertag}: {msg}"', timeout=10.0)
-                except Exception:
-                    pass
-            return
+                except Exception as e:
+                    log.warning(f"ZORP: create flow failed: {e}")
+                return
+
+            if phrase == "goodbye":
+                if gt_lower in self._pending:
+                    del self._pending[gt_lower]
+                try:
+                    ok, msg = await self.delete_zorp(gamertag)
+                    if ok:
+                        await rcon.send_command(f'say "{gamertag}: {msg}"', timeout=10.0)
+                except Exception as e:
+                    log.warning(f"ZORP: delete flow failed: {e}")
+                return
+        except Exception as e:
+            log.warning(f"ZORP: handle_chat failed: {e}")
 
     # ------------------------------------------------------------------
     # Protection auto-toggle (online/offline)
