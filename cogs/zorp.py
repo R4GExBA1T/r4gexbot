@@ -54,9 +54,8 @@ class Zorp(commands.Cog):
             lines.append(f"**{cmd}** direct → ```{d_prev}```\n"
                          f"**{cmd}** broadcast → ```{b_prev}```")
 
-        # 3. Try teleport to self (may echo position) - use a dummy to avoid moving anyone
-        # Instead, try 'teleport' with no args to see usage/position info
-        for cmd in ["teleport", "printpos"]:
+        # 3. Try server.printpos variants (docs: "Print the current player position")
+        for cmd in ["server.printpos", "server.printeyes", "server.printposcenter"]:
             try:
                 direct = await rcon.send_command(cmd, timeout=10.0)
                 preview = (direct or "<empty>")[:500]
