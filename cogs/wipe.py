@@ -27,6 +27,10 @@ class Wipe(commands.Cog):
             """CREATE TABLE IF NOT EXISTS wipe_config (
                    guild_id INTEGER PRIMARY KEY,
                    wipe_at TEXT, channel_id INTEGER)""")
+        await self.bot.economy.db.execute(
+            """CREATE TABLE IF NOT EXISTS wipe_posted (
+                   guild_id INTEGER, milestone TEXT,
+                   PRIMARY KEY (guild_id, milestone))""")
         await self.bot.economy.db.commit()
         # Resume countdown if one was set
         self._task = asyncio.create_task(self._countdown_loop())
@@ -36,9 +40,12 @@ class Wipe(commands.Cog):
             self._task.cancel()
 
     async def _countdown_loop(self):
-        """Check every 5 minutes; post milestones."""
+        """Check every 5 minutes; post milestones.
+
+        Posted milestones persist in the DB (wipe_posted) so a bot restart
+        never re-sends a hype message.
+        """
         await asyncio.sleep(10)  # let bot start
-        posted = set()  # (guild_id, milestone) already announced
         while True:
             try:
                 cur = await self.bot.economy.db.execute(
@@ -50,12 +57,14 @@ class Wipe(commands.Cog):
                     delta = wipe_dt - now
                     if delta.total_seconds() <= 0:
                         # Wipe time! Announce and clear
-                        if (guild_id, "wipe") not in posted:
+                        if not await self._was_posted(guild_id, "wipe"):
                             await self._announce(guild_id, channel_id,
                                                  "🔥 **WIPE IS LIVE!** 🔥\nThe server has wiped! Fresh start, good luck!")
-                            posted.add((guild_id, "wipe"))
+                            await self._mark_posted(guild_id, "wipe")
                             await self.bot.economy.db.execute(
                                 "DELETE FROM wipe_config WHERE guild_id = ?", (guild_id,))
+                            await self.bot.economy.db.execute(
+                                "DELETE FROM wipe_posted WHERE guild_id = ?", (guild_id,))
                             await self.bot.economy.db.commit()
                         continue
                     # Milestones: 7d, 3d, 1d, 12h, 6h, 1h, 30m, 10m
@@ -71,18 +80,30 @@ class Wipe(commands.Cog):
                         (timedelta(days=7), "7d", "📅 **7 days** until wipe!"),
                     ]
                     for threshold, key, msg in milestones:
-                        if delta <= threshold and (guild_id, key) not in posted:
+                        if delta <= threshold and not await self._was_posted(guild_id, key):
                             await self._announce(guild_id, channel_id, msg)
-                            posted.add((guild_id, key))
+                            await self._mark_posted(guild_id, key)
                             break
                     # Mark all larger milestones as posted so we don't backfill
                     # e.g. if wipe is 18h away, don't later post "7 days" or "3 days"
                     for threshold, key, msg in milestones:
                         if delta <= threshold:
-                            posted.add((guild_id, key))
+                            await self._mark_posted(guild_id, key)
             except Exception:
                 pass
             await asyncio.sleep(300)  # check every 5 min
+
+    async def _was_posted(self, guild_id: int, milestone: str) -> bool:
+        cur = await self.bot.economy.db.execute(
+            "SELECT 1 FROM wipe_posted WHERE guild_id = ? AND milestone = ?",
+            (guild_id, milestone))
+        return await cur.fetchone() is not None
+
+    async def _mark_posted(self, guild_id: int, milestone: str) -> None:
+        await self.bot.economy.db.execute(
+            "INSERT OR IGNORE INTO wipe_posted (guild_id, milestone) VALUES (?, ?)",
+            (guild_id, milestone))
+        await self.bot.economy.db.commit()
 
     async def _announce(self, guild_id: int, channel_id: int, msg: str):
         try:
@@ -168,6 +189,9 @@ class Wipe(commands.Cog):
                 """INSERT OR REPLACE INTO wipe_config (guild_id, wipe_at, channel_id)
                    VALUES (?, ?, ?)""",
                 (interaction.guild_id, wipe_dt.isoformat(), interaction.channel_id))
+            # Fresh timer = fresh milestones
+            await self.bot.economy.db.execute(
+                "DELETE FROM wipe_posted WHERE guild_id = ?", (interaction.guild_id,))
             await self.bot.economy.db.commit()
             ts = int(wipe_dt.timestamp())
             await interaction.followup.send(
@@ -177,6 +201,8 @@ class Wipe(commands.Cog):
         elif action == "clear":
             await self.bot.economy.db.execute(
                 "DELETE FROM wipe_config WHERE guild_id = ?", (interaction.guild_id,))
+            await self.bot.economy.db.execute(
+                "DELETE FROM wipe_posted WHERE guild_id = ?", (interaction.guild_id,))
             await self.bot.economy.db.commit()
             await interaction.followup.send("✅ Wipe timer cleared.", ephemeral=True)
 
