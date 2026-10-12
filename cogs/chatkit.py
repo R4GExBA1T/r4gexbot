@@ -86,7 +86,11 @@ class ChatKit(commands.Cog):
 
     @tasks.loop(seconds=5)
     async def chat_listener(self):
-        """Maintain RCON connection and listen for chat. Reconnects on drop."""
+        """Maintain RCON connection and listen for chat. Reconnects on drop.
+
+        Forces a reconnect every 5 minutes because long-lived RCON websockets
+        go stale (stay 'connected' but stop receiving broadcasts).
+        """
         if not self._rcon_configured():
             return
         try:
@@ -102,7 +106,13 @@ class ChatKit(commands.Cog):
         try:
             async with websockets.connect(uri, open_timeout=10) as ws:
                 log.info("ChatKit: RCON connected, listening for chat")
+                # Reconnect every 5 min to avoid stale connections
+                end_time = asyncio.get_event_loop().time() + 300
                 async for raw in ws:
+                    # Time to refresh the connection?
+                    if asyncio.get_event_loop().time() >= end_time:
+                        log.info("ChatKit: refreshing RCON connection (5min)")
+                        break
                     try:
                         data = json.loads(raw)
                     except (json.JSONDecodeError, TypeError):
