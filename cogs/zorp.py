@@ -54,8 +54,10 @@ class Zorp(commands.Cog):
             lines.append(f"**{cmd}** direct → ```{d_prev}```\n"
                          f"**{cmd}** broadcast → ```{b_prev}```")
 
-        # 3. Try server.printpos variants (docs: "Print the current player position")
-        for cmd in ["server.printpos", "server.printeyes", "server.printposcenter"]:
+        # 3. Try server.printpos with player name argument
+        # (bare command said "invalid player" - it may need a name)
+        for cmd in ['server.printpos "R4GExBA1T"', 'server.printeyes "R4GExBA1T"',
+                    'printpos "R4GExBA1T"']:
             try:
                 direct = await rcon.send_command(cmd, timeout=10.0)
                 preview = (direct or "<empty>")[:500]
