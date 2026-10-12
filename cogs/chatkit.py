@@ -48,6 +48,21 @@ class ChatKit(commands.Cog):
         return bool(os.getenv("RCON_HOST") and os.getenv("RCON_PORT")
                     and os.getenv("RCON_PASSWORD"))
 
+    def reset_cooldown(self, gamertag: str, kit_name: str = "") -> int:
+        """Clear in-memory wheel-kit cooldowns for a gamertag.
+
+        If kit_name is given, only that kit's cooldown is cleared;
+        otherwise all of the player's wheel-kit cooldowns are cleared.
+        Returns the number of entries cleared.
+        """
+        gt = gamertag.lower()
+        kit = kit_name.lower()
+        to_delete = [k for k in self._cooldowns
+                     if k[0] == gt and (not kit or k[1] == kit)]
+        for k in to_delete:
+            del self._cooldowns[k]
+        return len(to_delete)
+
     async def _load_triggers(self) -> None:
         """Load chat triggers from the kits table."""
         try:

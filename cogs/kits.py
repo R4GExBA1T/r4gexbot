@@ -260,31 +260,41 @@ class Kits(commands.Cog):
     @app_commands.autocomplete(kit=_kit_autocomplete)
     async def kittimer(self, interaction: discord.Interaction,
                        user: discord.Member, kit: str = ""):
-        """Admin: clear kit_claims so the player can claim again immediately."""
+        """Admin: clear kit cooldowns (Discord claims + in-game wheel claims)."""
         if not self._is_admin(interaction):
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
+        kit = kit.lower().strip()
         if kit:
             cur = await self.bot.economy.db.execute(
-                "SELECT name FROM kits WHERE name = ?", (kit.lower(),))
+                "SELECT name FROM kits WHERE name = ?", (kit,))
             if not await cur.fetchone():
                 await interaction.followup.send(f"❌ No kit named `{kit}`.", ephemeral=True)
                 return
+            # Discord /kit claim cooldown
             await self.bot.economy.db.execute(
                 "DELETE FROM kit_claims WHERE user_id = ? AND kit_name = ?",
-                (user.id, kit.lower()))
-            await self.bot.economy.db.commit()
-            await interaction.followup.send(
-                f"✅ {user.mention}'s **{kit}** kit timer reset — they can claim now.",
-                ephemeral=True)
+                (user.id, kit))
         else:
             await self.bot.economy.db.execute(
                 "DELETE FROM kit_claims WHERE user_id = ?", (user.id,))
-            await self.bot.economy.db.commit()
-            await interaction.followup.send(
-                f"✅ {user.mention}'s **all** kit timers reset — they can claim now.",
-                ephemeral=True)
+        await self.bot.economy.db.commit()
+
+        # In-game wheel cooldown (tracked by gamertag in chatkit's memory)
+        wheel_cleared = 0
+        cur = await self.bot.economy.db.execute(
+            "SELECT gamertag FROM links WHERE discord_id = ?", (user.id,))
+        row = await cur.fetchone()
+        chatkit = self.bot.get_cog("ChatKit")
+        if row and chatkit and hasattr(chatkit, "reset_cooldown"):
+            wheel_cleared = chatkit.reset_cooldown(row[0], kit)
+
+        scope = f"**{kit}**" if kit else "**all**"
+        extra = f" (+{wheel_cleared} in-game wheel timer{'s' if wheel_cleared != 1 else ''})" if wheel_cleared else ""
+        await interaction.followup.send(
+            f"✅ {user.mention}'s {scope} kit timer reset — they can claim now{extra}.",
+            ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
