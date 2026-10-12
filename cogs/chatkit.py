@@ -129,20 +129,18 @@ class ChatKit(commands.Cog):
         log.info(f"ChatKit: trigger '{matched}' detected in: {text[:200]}")
 
         # Extract gamertag from common formats
-        # "[CHAT SERVER] Name : message" or "[CHAT] Name : message"
+        # "[CHAT SERVER] Name : message", "[CHAT LOCAL] Name : message",
+        # "[CHAT TEAM] Name : message", or "[CHAT] Name : message"
         gamertag = None
         try:
-            # Handle [CHAT SERVER] and [CHAT] prefixes
+            # Handle all [CHAT ...] prefixes (SERVER, LOCAL, TEAM, or bare)
             chat_part = None
-            if "[CHAT SERVER]" in text:
-                chat_part = text.split("[CHAT SERVER]", 1)[1].strip()
-            elif "[CHAT]" in text:
-                chat_part = text.split("[CHAT]", 1)[1].strip()
-                # Strip any remaining [TAG] prefix like "SERVER]"
-                chat_part = re.sub(r'^\[?[A-Z]+\]?\s*', '', chat_part).strip()
-                # Also handle "SERVER] Name" leftover
-                if chat_part.startswith("SERVER]"):
-                    chat_part = chat_part[7:].strip()
+            m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+            if m_prefix:
+                chat_part = m_prefix.group(1).strip()
+                # Strip leftover nested tag like "SERVER]" (only when a ] is present,
+                # so gamertags starting with uppercase letters are untouched)
+                chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
             if chat_part and " : " in chat_part:
                 gamertag = chat_part.split(" : ", 1)[0].strip()
             elif chat_part and ":" in chat_part:
