@@ -54,6 +54,12 @@ class Zorp(commands.Cog):
             lines.append(f"**{cmd}** direct → ```{d_prev}```\n"
                          f"**{cmd}** broadcast → ```{b_prev}```")
 
+        # 3. Find available commands mentioning position/team/zone
+        for filt in ["playerlistpos", "position", "team", "zone"]:
+            resp = await rcon.send_command(f"find {filt}", timeout=10.0)
+            preview = (resp or "<empty>")[:500]
+            lines.append(f"**find {filt}** → ```{preview}```")
+
         await interaction.followup.send("\n\n".join(lines), ephemeral=True)
 
     async def _capture_broadcast(self, command: str, seconds: int = 8) -> str:
