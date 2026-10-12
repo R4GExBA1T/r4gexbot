@@ -115,11 +115,28 @@ class ChatKit(commands.Cog):
     async def _handle_message(self, data: dict) -> None:
         """Parse an incoming RCON message for kit trigger phrases."""
         message = data.get("Message", "")
-        if not message or not self._triggers:
+        if not message:
             return
 
         text = str(message)
         text_lower = text.lower()
+
+        # Forward to ZORP first (it handles its own phrase matching)
+        # Extract gamertag early for ZORP
+        zorp_gt = None
+        try:
+            m_p = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+            if m_p:
+                cp = re.sub(r'^[A-Z]+\]\s*', '', m_p.group(1).strip()).strip()
+                if " : " in cp:
+                    zorp_gt = re.sub(r'\[.*?\]', '', cp.split(" : ", 1)[0]).strip() or None
+        except (IndexError, ValueError):
+            pass
+        if zorp_gt:
+            await self._forward_to_zorp(text, zorp_gt)
+
+        if not self._triggers:
+            return
 
         # Normalize quick-chat wheel format:
         # "[CHAT SERVER] Name : d11_quick_chat_i_need_phrase_format wood"
@@ -175,6 +192,28 @@ class ChatKit(commands.Cog):
 
         kit_name, contents, cd_hours = self._triggers[matched]
         await self._try_give_kit(gamertag, kit_name, contents, cd_hours)
+
+    async def _forward_to_zorp(self, text: str, gamertag: str | None) -> None:
+        """Pass chat to the Zorp cog for wheel-phrase handling."""
+        zorp = self.bot.get_cog("Zorp")
+        if not zorp or not hasattr(zorp, "handle_chat"):
+            return
+        if not gamertag:
+            # Try to extract gamertag for ZORP even if kit parsing failed
+            try:
+                m_prefix = re.search(r'\[CHAT[^\]]*\]\s*(.*)', text, re.DOTALL)
+                if m_prefix:
+                    chat_part = m_prefix.group(1).strip()
+                    chat_part = re.sub(r'^[A-Z]+\]\s*', '', chat_part).strip()
+                    if " : " in chat_part:
+                        gamertag = chat_part.split(" : ", 1)[0].strip()
+                    elif ":" in chat_part:
+                        gamertag = chat_part.split(":", 1)[0].strip()
+                    gamertag = re.sub(r'\[.*?\]', '', gamertag).strip() or None
+            except (IndexError, ValueError):
+                pass
+        if gamertag:
+            await zorp.handle_chat(gamertag, text)
 
     async def _try_give_kit(self, gamertag: str, kit_name: str,
                             contents: str, cd_hours: float) -> None:

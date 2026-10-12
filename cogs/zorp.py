@@ -1,106 +1,317 @@
 """ZORP — Zone of Raid Protection.
 
 Player flow (in-game chat wheel):
-  1. Player opens chat wheel -> "Can I build around here?"
-  2. Bot asks in chat: "Are you stood in the centre of your base?"
-  3. Player answers via wheel: "Yes" -> ZORP created at their position.
-     "Goodbye" -> their ZORP is deleted.
-  4. Zone auto-enables when they log off, disables when they log on.
+  1. Player: "Can I build around here?" (wheel)
+  2. Bot (in-game): "Are you stood in the centre of your base? Say YES to create your ZORP, or GOODBYE to remove it."
+  3. Player: "Yes" (wheel) -> ZORP created at their current position.
+     Player: "Goodbye" (wheel) -> their ZORP is deleted.
+  4. Protection auto-toggles: building damage BLOCKED when offline,
+     ALLOWED when online (purple ring always visible).
 
-Mechanism: Rust Console native custom zones with building damage OFF.
+Mechanism: Rust Console native custom zones via RCON.
+Position: server.printpos "<gamertag>" -> (x, y, z).
 """
+import asyncio
 import discord
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from services import rcon
 
+log = logging.getLogger("zorp")
+
+# ZORP zone defaults
+ZORP_RADIUS = 40  # meters
+ZORP_COLOR = (128, 0, 128)  # purple
+
 
 class Zorp(commands.Cog):
+    """ZORP raid protection via native custom zones."""
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # gamertag.lower() -> True (waiting for yes/goodbye after prompt)
+        self._pending: dict[str, datetime] = {}
 
+    async def cog_load(self) -> None:
+        await self._init_db()
+        if self._rcon_configured():
+            # Chat comes via ChatKit's RCON listener -> handle_chat()
+            self.protection_poller.start()
+            log.info("ZORP protection poller started")
+        else:
+            log.info("ZORP: RCON not configured, disabled")
+
+    async def cog_unload(self) -> None:
+        self.protection_poller.cancel()
+
+    def _rcon_configured(self) -> bool:
+        return bool(os.getenv("RCON_HOST") and os.getenv("RCON_PORT")
+                    and os.getenv("RCON_PASSWORD"))
+
+    async def _init_db(self) -> None:
+        await self.bot.economy.db.execute("""
+            CREATE TABLE IF NOT EXISTS zorps (
+                gamertag TEXT PRIMARY KEY,
+                zone_name TEXT NOT NULL,
+                x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
+                radius REAL NOT NULL DEFAULT 40,
+                created_at TEXT NOT NULL,
+                protection_on INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        await self.bot.economy.db.commit()
+
+    # ------------------------------------------------------------------
+    # Position
+    # ------------------------------------------------------------------
+    async def get_position(self, gamertag: str) -> tuple[float, float, float] | None:
+        """Get player's XYZ via server.printpos. Returns (x, y, z) or None."""
+        try:
+            resp = await rcon.send_command(f'server.printpos "{gamertag}"', timeout=10.0)
+        except Exception as e:
+            log.warning(f"ZORP: printpos failed for {gamertag}: {e}")
+            return None
+        if not resp:
+            return None
+        # Format: (-1265.62, 0.56, -1815.30)
+        m = re.search(r'\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)', resp)
+        if not m:
+            log.warning(f"ZORP: could not parse position from: {resp[:100]}")
+            return None
+        return (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+
+    # ------------------------------------------------------------------
+    # Zone management
+    # ------------------------------------------------------------------
+    def _zone_name(self, gamertag: str) -> str:
+        # Sanitize for zone name: alphanumeric + underscore
+        safe = re.sub(r'[^a-zA-Z0-9_]', '_', gamertag)
+        return f"zorp_{safe}"
+
+    async def create_zorp(self, gamertag: str) -> tuple[bool, str]:
+        """Create a ZORP zone at the player's current position."""
+        # Check if they already have one
+        cur = await self.bot.economy.db.execute(
+            "SELECT zone_name FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
+        if await cur.fetchone():
+            return (False, "You already have a ZORP. Say GOODBYE to remove it first.")
+
+        pos = await self.get_position(gamertag)
+        if not pos:
+            return (False, "Could not find your position. Try again.")
+        x, y, z = pos
+        zone = self._zone_name(gamertag)
+
+        # Create the zone: sphere, PvP on, no building damage, building allowed
+        # zones.createcustomzone "Name" (x,y,z) rotation Sphere radius pvp npc rad builddmg build
+        create_cmd = (f'zones.createcustomzone "{zone}" '
+                      f'({x:.2f},{y:.2f},{z:.2f}) 0 Sphere {ZORP_RADIUS} 1 1 0 0 1')
+        try:
+            await rcon.send_command(create_cmd, timeout=15.0)
+        except Exception as e:
+            log.warning(f"ZORP: create failed for {gamertag}: {e}")
+            return (False, "Failed to create ZORP zone. Try again.")
+
+        # Configure: purple ring, visible, enter/leave messages
+        r, g, b = ZORP_COLOR
+        edits = [
+            ("showarea", "1"),
+            ("color", f"({r},{g},{b})"),
+            ("showchatmessage", "1"),
+            ("entermessage", f"Entering {gamertag}'s ZORP - raid protection active while they're offline"),
+            ("leavemessage", "Leaving ZORP"),
+        ]
+        for setting, value in edits:
+            try:
+                await rcon.send_command(
+                    f'zones.editcustomzone "{zone}" {setting} "{value}"', timeout=10.0)
+            except Exception as e:
+                log.warning(f"ZORP: edit {setting} failed for {zone}: {e}")
+
+        # Save to DB (protection starts ON — assume offline until poller confirms)
+        await self.bot.economy.db.execute(
+            """INSERT OR REPLACE INTO zorps
+               (gamertag, zone_name, x, y, z, radius, created_at, protection_on)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+            (gamertag.lower(), zone, x, y, z, ZORP_RADIUS,
+             datetime.now(timezone.utc).isoformat()))
+        await self.bot.economy.db.commit()
+        log.info(f"ZORP: created {zone} at ({x:.1f},{y:.1f},{z:.1f}) for {gamertag}")
+        return (True, f"ZORP created! Purple ring marks your protected zone ({ZORP_RADIUS}m). Protection activates when you log off.")
+
+    async def delete_zorp(self, gamertag: str) -> tuple[bool, str]:
+        """Delete a player's ZORP zone."""
+        cur = await self.bot.economy.db.execute(
+            "SELECT zone_name FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
+        row = await cur.fetchone()
+        if not row:
+            return (False, "You don't have a ZORP to remove.")
+        zone = row[0]
+        try:
+            await rcon.send_command(f'zones.deletecustomzone "{zone}"', timeout=10.0)
+        except Exception as e:
+            log.warning(f"ZORP: delete failed for {zone}: {e}")
+        await self.bot.economy.db.execute(
+            "DELETE FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
+        await self.bot.economy.db.commit()
+        log.info(f"ZORP: deleted {zone} for {gamertag}")
+        return (True, "Your ZORP has been removed.")
+
+    async def set_protection(self, gamertag: str, zone_name: str, on: bool) -> None:
+        """Toggle building-damage protection (on = blocked when offline)."""
+        value = "0" if on else "1"  # allowbuildingdamage 0 = no raid damage
+        try:
+            await rcon.send_command(
+                f'zones.editcustomzone "{zone_name}" allowbuildingdamage {value}',
+                timeout=10.0)
+            await self.bot.economy.db.execute(
+                "UPDATE zorps SET protection_on = ? WHERE gamertag = ?",
+                (1 if on else 0, gamertag.lower(),))
+            await self.bot.economy.db.commit()
+            log.info(f"ZORP: protection {'ON' if on else 'OFF'} for {gamertag}")
+        except Exception as e:
+            log.warning(f"ZORP: protection toggle failed for {zone_name}: {e}")
+
+    # ------------------------------------------------------------------
+    # Chat wheel handling (called by ChatKit's RCON listener)
+    # ------------------------------------------------------------------
+    def _normalize_wheel(self, text: str) -> str:
+        """Normalize wheel broadcast to a plain phrase."""
+        tl = text.lower()
+        if "can i build" in tl or "build around here" in tl:
+            return "can i build around here?"
+        if re.search(r'\byes\b', tl):
+            return "yes"
+        if "goodbye" in tl or re.search(r'\bbye\b', tl):
+            return "goodbye"
+        return ""
+
+    async def handle_chat(self, gamertag: str, text: str) -> None:
+        """Handle a chat message from a player (called by ChatKit)."""
+        phrase = self._normalize_wheel(text)
+        if not phrase:
+            return
+        gt_lower = gamertag.lower()
+        log.info(f"ZORP: phrase '{phrase}' from {gamertag}")
+
+        if phrase == "can i build around here?":
+            self._pending[gt_lower] = datetime.now(timezone.utc)
+            try:
+                await rcon.send_command(
+                    f'say "{gamertag}, are you stood in the centre of your base? '
+                    f'Say YES on the chat wheel to create your ZORP, or GOODBYE to remove it."',
+                    timeout=10.0)
+            except Exception as e:
+                log.warning(f"ZORP: prompt failed: {e}")
+            return
+
+        if phrase == "yes":
+            if gt_lower not in self._pending:
+                return
+            del self._pending[gt_lower]
+            ok, msg = await self.create_zorp(gamertag)
+            try:
+                await rcon.send_command(f'say "{gamertag}: {msg}"', timeout=10.0)
+            except Exception:
+                pass
+            return
+
+        if phrase == "goodbye":
+            if gt_lower in self._pending:
+                del self._pending[gt_lower]
+            ok, msg = await self.delete_zorp(gamertag)
+            if ok:
+                try:
+                    await rcon.send_command(f'say "{gamertag}: {msg}"', timeout=10.0)
+                except Exception:
+                    pass
+            return
+
+    # ------------------------------------------------------------------
+    # Protection auto-toggle (online/offline)
+    # ------------------------------------------------------------------
+    @tasks.loop(minutes=5)
+    async def protection_poller(self):
+        """Every 5 min: protection ON for offline players, OFF for online."""
+        try:
+            cur = await self.bot.economy.db.execute(
+                "SELECT gamertag, zone_name, protection_on FROM zorps")
+            zorps = await cur.fetchall()
+            if not zorps:
+                return
+
+            # Get online players
+            online: set[str] = set()
+            try:
+                resp = await rcon.send_command("playerlist", timeout=15.0)
+                if resp:
+                    data = json.loads(resp)
+                    for p in data:
+                        name = p.get("DisplayName", "")
+                        if name:
+                            online.add(name.lower())
+            except Exception as e:
+                log.warning(f"ZORP: playerlist poll failed: {e}")
+                return
+
+            for gamertag, zone_name, protection_on in zorps:
+                is_online = gamertag.lower() in online
+                # Protection ON when offline, OFF when online
+                want_on = not is_online
+                if bool(protection_on) != want_on:
+                    await self.set_protection(gamertag, zone_name, want_on)
+        except Exception as e:
+            log.warning(f"ZORP: poller error: {e}")
+
+    @protection_poller.before_loop
+    async def _before_poller(self):
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
+    # Admin commands
+    # ------------------------------------------------------------------
     def _is_admin(self, interaction: discord.Interaction) -> bool:
         return (interaction.user.guild_permissions.administrator or
                 interaction.guild.owner_id == interaction.user.id)
 
-    @app_commands.command(name="zorpdebug", description="🛡️ Probe ZORP RCON commands (admin)")
-    async def zorpdebug(self, interaction: discord.Interaction):
-        """Test whether zone + position commands work via RCON.
-
-        Captures both the direct command response AND broadcast output,
-        since some commands print to the console stream instead.
-        """
+    @app_commands.command(name="zorp", description="🛡️ Manage ZORP raid protection (admin)")
+    @app_commands.describe(action="What to do",
+                           player="Player gamertag (for create/delete)")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="List all ZORPs", value="list"),
+        app_commands.Choice(name="Delete a player's ZORP", value="delete"),
+    ])
+    async def zorp(self, interaction: discord.Interaction,
+                   action: str, player: str = ""):
         if not self._is_admin(interaction):
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        lines = []
 
-        # 1. Zone list (direct response already proven to work)
-        try:
-            resp = await rcon.send_command("zones.listcustomzones", timeout=12.0)
-            preview = (resp or "<empty response>")[:300]
-            lines.append(f"**zones.listcustomzones** → OK\n```{preview}```")
-        except Exception as e:
-            lines.append(f"**zones.listcustomzones** → ERROR: {e}")
-
-        # 2. Position commands: capture direct response + 8s of broadcast
-        for cmd in ["server.playerlistpos", "players", "playerlist"]:
-            direct = await rcon.send_command(cmd, timeout=10.0)
-            broadcast = await self._capture_broadcast(cmd, seconds=8)
-            d_prev = (direct or "<empty>")[:300]
-            b_prev = (broadcast or "<nothing in broadcast>")[:800]
-            lines.append(f"**{cmd}** direct → ```{d_prev}```\n"
-                         f"**{cmd}** broadcast → ```{b_prev}```")
-
-        # 3. Try server.printpos with player name argument
-        # (bare command said "invalid player" - it may need a name)
-        for cmd in ['server.printpos "R4GExBA1T"', 'server.printeyes "R4GExBA1T"',
-                    'printpos "R4GExBA1T"']:
-            try:
-                direct = await rcon.send_command(cmd, timeout=10.0)
-                preview = (direct or "<empty>")[:500]
-            except Exception as e:
-                preview = f"<error: {e}>"
-            lines.append(f"**{cmd}** → ```{preview}```")
-
-        await interaction.followup.send("\n\n".join(lines), ephemeral=True)
-
-    async def _capture_broadcast(self, command: str, seconds: int = 8) -> str:
-        """Send a command on a fresh socket and collect everything for N seconds."""
-        import asyncio, json, os
-        try:
-            import websockets
-        except ImportError:
-            return "<no websockets>"
-        host = os.getenv("RCON_HOST")
-        port = os.getenv("RCON_PORT")
-        password = os.getenv("RCON_PASSWORD")
-        if not (host and port and password):
-            return "<RCON not configured>"
-        uri = f"ws://{host}:{port}/{password}"
-        collected = []
-        try:
-            async with websockets.connect(uri, open_timeout=10) as ws:
-                await ws.send(json.dumps({
-                    "Identifier": 1, "Message": command, "Name": "WebRcon"}))
-                end = asyncio.get_event_loop().time() + seconds
-                while True:
-                    remaining = end - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        break
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-                        data = json.loads(raw)
-                        msg = str(data.get("Message", "")).strip()
-                        if msg and msg not in collected:
-                            collected.append(msg)
-                    except asyncio.TimeoutError:
-                        break
-        except Exception as e:
-            return f"<error: {e}>"
-        return "\n".join(collected)
+        if action == "list":
+            cur = await self.bot.economy.db.execute(
+                "SELECT gamertag, zone_name, x, y, z, protection_on, created_at FROM zorps")
+            rows = await cur.fetchall()
+            if not rows:
+                await interaction.followup.send("No ZORPs active.", ephemeral=True)
+                return
+            lines = []
+            for gt, zn, x, y, z, prot, created in rows:
+                status = "🛡️ ON (offline)" if prot else "⚔️ OFF (online)"
+                lines.append(f"**{gt}** → `{zn}` @ ({x:.0f},{z:.0f}) {status}")
+            await interaction.followup.send("\n".join(lines), ephemeral=True)
+        elif action == "delete":
+            if not player:
+                await interaction.followup.send("Provide a player gamertag.", ephemeral=True)
+                return
+            ok, msg = await self.delete_zorp(player)
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
