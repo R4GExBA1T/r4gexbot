@@ -122,8 +122,8 @@ ITEM_ALIASES = {
     "9mm": "ammo.pistol",
     "buckshot": "ammo.shotgun",
     "slug": "ammo.shotgun.slug",
-    "handmade shell": "ammo.shotgun.handmade",
-    "handmade shells": "ammo.shotgun.handmade",
+    "handmade shell": "ammo.handmade.shell",
+    "handmade shells": "ammo.handmade.shell",
     # medical / food
     "bandage": "bandage",
     "medsyringe": "syringe.medical",
@@ -195,8 +195,9 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
                 # Command was sent (empty response is normal for give commands)
                 sent += 1
             remaining -= chunk
-            # Small delay to avoid overwhelming the server with rapid commands
-            await asyncio.sleep(0.5)
+            # Delay between items so the server processes each giveto reliably.
+            # 0.5s proved too fast on Console (items silently dropped).
+            await asyncio.sleep(1.5)
 
     if failed > 0 and sent == 0:
         return False, "RCON connection failed - no items sent."
