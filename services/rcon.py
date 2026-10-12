@@ -194,30 +194,27 @@ async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
     try:
         async with websockets.connect(uri, open_timeout=10) as ws:
             for shortname, amount in items:
-                # inventory.giveto splits large stacks; chunk at 1000
-                remaining = amount
-                while remaining > 0:
-                    chunk = min(remaining, 1000)
+                # Send the full amount in one command — the server decides
+                # whether to god-stack it or split it into normal stacks.
+                try:
+                    await ws.send(json.dumps({
+                        "Identifier": 1,
+                        "Message": f'inventory.giveto "{gamertag}" "{shortname}" "{amount}"',
+                        "Name": "WebRcon",
+                    }))
+                    # Read the ack so commands stay ordered; short timeout
+                    # since giveto acks are usually empty/fast.
                     try:
-                        await ws.send(json.dumps({
-                            "Identifier": 1,
-                            "Message": f'inventory.giveto "{gamertag}" "{shortname}" "{chunk}"',
-                            "Name": "WebRcon",
-                        }))
-                        # Read the ack so commands stay ordered; short timeout
-                        # since giveto acks are usually empty/fast.
-                        try:
-                            await asyncio.wait_for(ws.recv(), timeout=5.0)
-                        except asyncio.TimeoutError:
-                            pass
-                        sent += 1
-                        log.info(f"Kit: gave {shortname} x{chunk} to {gamertag}")
-                    except Exception as e:
-                        failed += 1
-                        log.warning(f"Kit: failed {shortname} x{chunk} to {gamertag}: {e}")
-                    remaining -= chunk
-                    # No artificial delay: the ack-read above already sequences
-                    # commands, so all items fire back-to-back and land together.
+                        await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass
+                    sent += 1
+                    log.info(f"Kit: gave {shortname} x{amount} to {gamertag}")
+                except Exception as e:
+                    failed += 1
+                    log.warning(f"Kit: failed {shortname} x{amount} to {gamertag}: {e}")
+                # No artificial delay: the ack-read above already sequences
+                # commands, so all items fire back-to-back and land together.
     except Exception as e:
         log.warning(f"Kit: RCON connection failed for {gamertag}: {e}")
         return False, "RCON connection failed - no items sent."
