@@ -66,6 +66,15 @@ SETTINGS = {
     "log_channel": ("📝 Log Channel",
                     "Channel ID for moderation logs. 0 turns it off.",
                     "0", True),
+    "killfeed_channel": ("⚔️ Killfeed Channel",
+                    "Channel ID where PvP kills post live from the server. 0 turns it off.\nRight-click a channel → Copy Channel ID (Developer Mode on).",
+                    "0", True),
+    "kill_scrap": ("💀 Scrap Per Kill",
+                   "Scrap paid for each PvP kill. 0 turns it off.",
+                   "10", True),
+    "raidprotect_hours": ("🛡️ Raid Protection Hours",
+                   "How long new players are protected from being raided after first joining.",
+                   "24", True),
 }
 
 DEFAULTS = {k: v[2] for k, v in SETTINGS.items()}
@@ -81,6 +90,8 @@ CATEGORIES = {
                ["min_bet", "max_bet", "hilo_multiplier", "clan_cost"]),
     "channels": ("📢 Channels", "Welcome messages & mod logs",
                  ["welcome_channel", "log_channel"]),
+    "combat": ("⚔️ Combat", "Killfeed, kill rewards & raid protection",
+               ["killfeed_channel", "kill_scrap", "raidprotect_hours"]),
 }
 
 # Quick-start presets for new servers
