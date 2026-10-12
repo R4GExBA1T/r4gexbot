@@ -241,6 +241,37 @@ class Kits(commands.Cog):
                 await interaction.followup.send(
                     f"✅ Chat trigger removed from kit `{name}`.", ephemeral=True)
 
+    @app_commands.command(name="kittimer", description="⏱️ Reset a player's kit cooldown (admin)")
+    @app_commands.describe(user="Player whose kit timer to reset",
+                           kit="Kit name (leave blank to reset ALL kits for them)")
+    async def kittimer(self, interaction: discord.Interaction,
+                       user: discord.Member, kit: str = ""):
+        """Admin: clear kit_claims so the player can claim again immediately."""
+        if not self._is_admin(interaction):
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        if kit:
+            cur = await self.bot.economy.db.execute(
+                "SELECT name FROM kits WHERE name = ?", (kit.lower(),))
+            if not await cur.fetchone():
+                await interaction.followup.send(f"❌ No kit named `{kit}`.", ephemeral=True)
+                return
+            await self.bot.economy.db.execute(
+                "DELETE FROM kit_claims WHERE user_id = ? AND kit_name = ?",
+                (user.id, kit.lower()))
+            await self.bot.economy.db.commit()
+            await interaction.followup.send(
+                f"✅ {user.mention}'s **{kit}** kit timer reset — they can claim now.",
+                ephemeral=True)
+        else:
+            await self.bot.economy.db.execute(
+                "DELETE FROM kit_claims WHERE user_id = ?", (user.id,))
+            await self.bot.economy.db.commit()
+            await interaction.followup.send(
+                f"✅ {user.mention}'s **all** kit timers reset — they can claim now.",
+                ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Kits(bot))
