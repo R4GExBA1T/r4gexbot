@@ -46,7 +46,7 @@ class Zorp(commands.Cog):
             lines.append(f"**zones.listcustomzones** → ERROR: {e}")
 
         # 2. Position commands: capture direct response + 8s of broadcast
-        for cmd in ["server.playerlistpos", "players", "status"]:
+        for cmd in ["server.playerlistpos", "players", "playerlist"]:
             direct = await rcon.send_command(cmd, timeout=10.0)
             broadcast = await self._capture_broadcast(cmd, seconds=8)
             d_prev = (direct or "<empty>")[:300]
@@ -54,11 +54,15 @@ class Zorp(commands.Cog):
             lines.append(f"**{cmd}** direct → ```{d_prev}```\n"
                          f"**{cmd}** broadcast → ```{b_prev}```")
 
-        # 3. Find available commands mentioning position/team/zone
-        for filt in ["playerlistpos", "position", "team", "zone"]:
-            resp = await rcon.send_command(f"find {filt}", timeout=10.0)
-            preview = (resp or "<empty>")[:500]
-            lines.append(f"**find {filt}** → ```{preview}```")
+        # 3. Try teleport to self (may echo position) - use a dummy to avoid moving anyone
+        # Instead, try 'teleport' with no args to see usage/position info
+        for cmd in ["teleport", "printpos"]:
+            try:
+                direct = await rcon.send_command(cmd, timeout=10.0)
+                preview = (direct or "<empty>")[:500]
+            except Exception as e:
+                preview = f"<error: {e}>"
+            lines.append(f"**{cmd}** → ```{preview}```")
 
         await interaction.followup.send("\n\n".join(lines), ephemeral=True)
 
