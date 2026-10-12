@@ -291,11 +291,18 @@ class Economy(commands.Cog):
             )
             return
         await _economy(self.bot).link_rust(interaction.user.id, gamertag)
-        await interaction.followup.send(
-            f"🔗 Rust Console gamertag linked (`{gamertag}`). You'll be ready when "
-            "server rewards go live.",
-            ephemeral=True,
-        )
+        msg = (f"🔗 Rust Console gamertag linked (`{gamertag}`). You'll be ready when "
+               "server rewards go live.")
+        # Pay out any banked kill Scrap
+        try:
+            kf = self.bot.get_cog("Killfeed")
+            if kf:
+                paid = await kf.pay_pending_scrap(gamertag, interaction.user.id)
+                if paid:
+                    msg += f"\n💰 **+{paid} Scrap** paid out from your banked kills!"
+        except Exception:
+            pass
+        await interaction.followup.send(msg, ephemeral=True,)
 
     @app_commands.command(name="unlinkrust", description="Unlink your Rust Console gamertag")
     async def unlinkrust(self, interaction: discord.Interaction):
