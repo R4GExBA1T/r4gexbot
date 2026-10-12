@@ -15,6 +15,20 @@ from datetime import datetime, timezone, timedelta
 RUST_COLOR = 0xCE6A2C
 
 
+async def _kit_autocomplete(interaction: discord.Interaction, current: str):
+    """Suggest kit names for /kittimer's kit parameter."""
+    try:
+        bot = interaction.client
+        cur = await bot.economy.db.execute(
+            "SELECT name FROM kits ORDER BY name LIMIT 25")
+        rows = await cur.fetchall()
+        current = (current or "").lower()
+        return [app_commands.Choice(name=r[0], value=r[0])
+                for r in rows if current in r[0].lower()][:25]
+    except Exception:
+        return []
+
+
 class Kits(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -244,6 +258,7 @@ class Kits(commands.Cog):
     @app_commands.command(name="kittimer", description="⏱️ Reset a player's kit cooldown (admin)")
     @app_commands.describe(user="Player whose kit timer to reset",
                            kit="Kit name (leave blank to reset ALL kits for them)")
+    @app_commands.autocomplete(kit=_kit_autocomplete)
     async def kittimer(self, interaction: discord.Interaction,
                        user: discord.Member, kit: str = ""):
         """Admin: clear kit_claims so the player can claim again immediately."""
