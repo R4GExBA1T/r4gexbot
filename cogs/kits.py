@@ -65,8 +65,8 @@ class Kits(commands.Cog):
             ("starter",
              "Eoka Pistol x1, Handmade Shells x5, Bandage x6, Stone Pickaxe x1, Stone Axe x1, Low Grade Fuel x50",
              0.5, 0, starter_trigger))
-        # Seed the starter2 kit: "I need water" wheel trigger, 6h cooldown
-        # (Tyson 2026-10-12: water wheel gives starter2 every 6 hours)
+        # Seed the starter2 kit: "I need water" wheel trigger, 18h cooldown
+        # (Tyson 2026-10-12: water wheel gives starter2 every 18 hours)
         cur = await self.bot.economy.db.execute(
             "SELECT chat_trigger FROM kits WHERE name = 'starter2'")
         row = await cur.fetchone()
@@ -76,7 +76,7 @@ class Kits(commands.Cog):
                VALUES (?, ?, ?, ?, ?)""",
             ("starter2",
              "Double Barrel Shotgun x1, Crossbow x1, Handmade Shells x12, Arrows x30, Stims x2, Bandage x6, Wood x6000, Stone x6000, Metal Frags x3000, Low Grade Fuel x100, Jackhammer x1, Chainsaw x1",
-             6, 0, s2_trigger))
+             18, 0, s2_trigger))
         # Seed metal frags kit for "I need metal" wheel trigger (daily)
         cur = await self.bot.economy.db.execute(
             "SELECT name FROM kits WHERE name = 'metal'")
