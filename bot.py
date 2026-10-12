@@ -70,22 +70,23 @@ class Ximmy(commands.Bot):
         await self.load_extension("cogs.stafflogs")
         await self.load_extension("cogs.chatkit")
         await self.load_extension("cogs.killfeed")
+        await self.load_extension("cogs.zorp")
         # NOTE: Auto-sync disabled — commands are managed manually via API.
         # The safe auto-sync (copy_global_to + empty-payload guard) works
         # correctly and was used to register /clan on 2026-10-07. It can be
         # re-enabled by uncommenting the block below.
         #
         # Safe auto-sync block (guarded against the 2026-10-07 wipe):
-        # DISABLED again 2026-10-12 after registering /killfeed /stats /protect
-        # guild = discord.Object(id=1556869956388266037)  # R4GE 3X
-        # self.tree.copy_global_to(guild=guild)
-        # payload = list(self.tree.walk_commands(guild=guild))
-        # if not payload:
-        #     print("Ximmy online — REFUSED guild sync: empty payload, skipping to avoid wipe.")
-        # else:
-        #     synced = await self.tree.sync(guild=guild)
-        #     print(f"Ximmy online — synced {len(synced)} slash commands.")
-        print(f"Ximmy online — auto-sync disabled, commands managed via API.")
+        # TEMPORARILY ENABLED 2026-10-12 to register /zorpdebug
+        guild = discord.Object(id=1556869956388266037)  # R4GE 3X
+        self.tree.copy_global_to(guild=guild)
+        payload = list(self.tree.walk_commands(guild=guild))
+        if not payload:
+            print("Ximmy online — REFUSED guild sync: empty payload, skipping to avoid wipe.")
+        else:
+            synced = await self.tree.sync(guild=guild)
+            print(f"Ximmy online — synced {len(synced)} slash commands.")
+        # print(f"Ximmy online — auto-sync disabled, commands managed via API.")
 
     async def close(self) -> None:
         await self.economy.close()
