@@ -170,37 +170,60 @@ def parse_kit_contents(contents: str) -> list[tuple[str, int]]:
 
 
 async def give_kit(gamertag: str, contents: str) -> tuple[bool, str]:
-    """Deliver a kit's items to a player via RCON inv.giveplayer.
+    """Deliver a kit's items to a player via RCON inventory.giveto.
+
+    Uses a single persistent RCON connection for all items (reconnecting
+    per item caused silent drops on Console). Items are sent in quick
+    succession so they all arrive effectively at once.
 
     Returns (success, message).
     """
     items = parse_kit_contents(contents)
     if not items:
         return False, "No deliverable items found in kit."
+    if not _HAS_WS or not is_configured():
+        return False, "RCON not configured."
+
+    host = os.getenv("RCON_HOST")
+    port = os.getenv("RCON_PORT")
+    password = os.getenv("RCON_PASSWORD")
+    uri = f"ws://{host}:{port}/{password}"
 
     sent = 0
     failed = 0
-    for shortname, amount in items:
-        # inventory.giveto splits large stacks; chunk at 1000
-        remaining = amount
-        while remaining > 0:
-            chunk = min(remaining, 1000)
-            resp = await send_command(
-                f'inventory.giveto "{gamertag}" "{shortname}" "{chunk}"')
-            if resp is None:
-                # Connection failed entirely
-                failed += 1
-                log.warning(f"RCON failed for {shortname} x{chunk} to {gamertag}")
-            else:
-                # Command was sent (empty response is normal for give commands)
-                sent += 1
-            remaining -= chunk
-            # Delay between items so the server processes each giveto reliably.
-            # 0.5s proved too fast on Console (items silently dropped).
-            await asyncio.sleep(1.5)
+    try:
+        async with websockets.connect(uri, open_timeout=10) as ws:
+            for shortname, amount in items:
+                # inventory.giveto splits large stacks; chunk at 1000
+                remaining = amount
+                while remaining > 0:
+                    chunk = min(remaining, 1000)
+                    try:
+                        await ws.send(json.dumps({
+                            "Identifier": 1,
+                            "Message": f'inventory.giveto "{gamertag}" "{shortname}" "{chunk}"',
+                            "Name": "WebRcon",
+                        }))
+                        # Read the ack so commands stay ordered; short timeout
+                        # since giveto acks are usually empty/fast.
+                        try:
+                            await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            pass
+                        sent += 1
+                        log.info(f"Kit: gave {shortname} x{chunk} to {gamertag}")
+                    except Exception as e:
+                        failed += 1
+                        log.warning(f"Kit: failed {shortname} x{chunk} to {gamertag}: {e}")
+                    remaining -= chunk
+                    # Brief pause so the server processes each command in order
+                    await asyncio.sleep(0.3)
+    except Exception as e:
+        log.warning(f"Kit: RCON connection failed for {gamertag}: {e}")
+        return False, "RCON connection failed - no items sent."
 
     if failed > 0 and sent == 0:
-        return False, "RCON connection failed - no items sent."
+        return False, "RCON failed - no items sent."
     if failed > 0:
         return True, f"Sent {sent} stacks to {gamertag} ({failed} failed)."
     return True, f"Delivered {len(items)} item types to {gamertag}."
