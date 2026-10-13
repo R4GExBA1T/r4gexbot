@@ -43,7 +43,11 @@ ID_SUFFIX = re.compile(r"\[\d+\]\s*$")
 
 
 def clean_name(raw: str) -> str:
-    name = ID_SUFFIX.sub("", raw).strip()
+    # RCON death messages can carry a trailing NUL (and other control
+    # chars) on the final name — strip them or links lookups miss and
+    # RCON `say` broadcasts get dropped by the server.
+    name = re.sub(r"[\x00-\x1f\x7f]", "", raw)
+    name = ID_SUFFIX.sub("", name).strip()
     name = re.sub(r"\s+", " ", name)
     return name
 
@@ -79,6 +83,7 @@ class Killfeed(commands.Cog):
                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                    killer TEXT, victim TEXT, ts TEXT, is_pvp INTEGER)""")
         await db.commit()
+        await self._normalize_stat_names()
         if self._rcon_configured():
             self.kill_listener.start()
             log.info("Killfeed listener started")
@@ -87,6 +92,51 @@ class Killfeed(commands.Cog):
 
     async def cog_unload(self) -> None:
         self.kill_listener.cancel()
+
+    async def _normalize_stat_names(self) -> None:
+        """One-time cleanup: merge player_stats rows whose gamertag has
+        stray control chars (e.g. a trailing NUL from the RCON feed) into
+        the clean-name row, and pay out any banked Scrap those rows hold
+        to the linked Discord account."""
+        db = self.bot.economy.db
+        cur = await db.execute(
+            "SELECT gamertag, kills, deaths, kill_scrap, pending_scrap,"
+            " best_streak, current_streak, first_seen, playtime_seconds"
+            " FROM player_stats")
+        rows = await cur.fetchall()
+        for (gt, k, dth, ks, pend, best, cur_streak, first, play) in rows:
+            clean = clean_name(gt)
+            if clean == gt:
+                continue
+            log.info(f"Killfeed: normalizing stats row {gt!r} -> {clean!r}")
+            await db.execute(
+                "INSERT INTO player_stats (gamertag, kills, deaths,"
+                " kill_scrap, pending_scrap, best_streak, current_streak,"
+                " first_seen, playtime_seconds)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(gamertag) DO UPDATE SET"
+                " kills = kills + excluded.kills,"
+                " deaths = deaths + excluded.deaths,"
+                " kill_scrap = kill_scrap + excluded.kill_scrap,"
+                " pending_scrap = pending_scrap + excluded.pending_scrap,"
+                " best_streak = MAX(best_streak, excluded.best_streak),"
+                " current_streak = MAX(current_streak,"
+                " excluded.current_streak),"
+                " playtime_seconds = playtime_seconds"
+                " + excluded.playtime_seconds",
+                (clean, k, dth, ks, pend, best, cur_streak, first, play))
+            await db.execute(
+                "DELETE FROM player_stats WHERE gamertag = ?", (gt,))
+            await db.commit()
+            # Pay out banked Scrap stranded on the dirty row
+            stats = await self._get_stats(clean)
+            pending = (stats or {}).get("pending_scrap", 0)
+            if pending and pending > 0:
+                discord_id = await self._discord_id_for(clean)
+                if discord_id:
+                    await self.pay_pending_scrap(clean, discord_id)
+                    log.info(
+                        f"Killfeed: paid {pending} banked Scrap to {clean}")
 
     def _rcon_configured(self) -> bool:
         return bool(os.getenv("RCON_HOST") and os.getenv("RCON_PORT")
@@ -219,18 +269,12 @@ class Killfeed(commands.Cog):
                 npc_scrap = 20
                 await db.execute(
                     "UPDATE player_stats SET kill_scrap = kill_scrap + ?"
-                    " WHERE gamertag = ?", (npc_scrap, killer.lower()))
+                    " WHERE gamertag = ?", (npc_scrap, killer))
                 await db.commit()
-                # Bank the Scrap if linked
-                from services.economy import EconomyService
-                # Find linked Discord user for the killer
-                cur = await db.execute(
-                    "SELECT discord_id FROM links WHERE gamertag = ?",
-                    (killer.lower(),))
-                row = await cur.fetchone()
-                if row:
-                    econ = self.bot.economy
-                    await econ.add_scrap(row[0], npc_scrap)
+                # Pay the Scrap if the killer is linked
+                discord_id = await self._discord_id_for(killer)
+                if discord_id:
+                    await self.bot.economy.add_scrap(discord_id, npc_scrap)
                 log.info(f"Killfeed: {killer} killed NPC {victim} (+{npc_scrap} Scrap)")
             except Exception as e:
                 log.warning(f"Killfeed: NPC kill reward failed: {e}")
