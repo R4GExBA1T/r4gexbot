@@ -338,7 +338,23 @@ class ScrapShop(commands.Cog):
                           description="🛒 Spend Scrap on in-game items")
     async def scrapshop(self, interaction: discord.Interaction):
         """Open the Scrap Shop."""
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception as e:
+            log.warning(f"ScrapShop: defer failed: {e}")
+            return
+        try:
+            await self._scrapshop_inner(interaction)
+        except Exception as e:
+            log.exception("ScrapShop: handler failed")
+            try:
+                await interaction.followup.send(
+                    f"❌ Shop error: {type(e).__name__}: {e}",
+                    ephemeral=True)
+            except Exception:
+                pass
+
+    async def _scrapshop_inner(self, interaction: discord.Interaction):
         # Check linked
         cur = await self.bot.economy.db.execute(
             "SELECT gamertag FROM links WHERE user_id = ?",
