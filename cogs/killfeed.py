@@ -428,7 +428,14 @@ class Killfeed(commands.Cog):
             def safe(name: str) -> str:
                 return name.replace('"', "'").replace("\n", " ").strip()
 
-            line = f"[KILLFEED] {safe(killer)} eliminated {safe(victim)}"
+            # Rich-text colour tags: killer PURPLE, victim RED
+            def cname(name: str, hexcolor: str) -> str:
+                return f"<color={hexcolor}>{safe(name)}</color>"
+
+            kname = cname(killer, "#B366FF")
+            vname = cname(victim, "#FF3333")
+
+            line = f"[KILLFEED] {kname} eliminated {vname}"
             if awarded > 0:
                 line += f" (+{awarded} Scrap)"
             await rcon_svc.send_command(f'say "{line}"')
@@ -436,11 +443,11 @@ class Killfeed(commands.Cog):
             hype = self._STREAK_HYPE.get(streak)
             if hype:
                 await rcon_svc.send_command(
-                    f'say "[KILLFEED] {safe(killer)} {hype}"')
+                    f'say "[KILLFEED] {kname} {hype}"')
             if victim_streak >= 3:
                 await rcon_svc.send_command(
-                    f'say "[KILLFEED] {safe(killer)} ended '
-                    f"{safe(victim)}'s {victim_streak}-kill streak!\"")
+                    f'say "[KILLFEED] {kname} ended '
+                    f"{vname}'s {victim_streak}-kill streak!\"")
         except Exception as e:
             log.warning(f"Killfeed: in-game broadcast failed: {e}")
 
