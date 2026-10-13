@@ -26,7 +26,7 @@ from services import rcon
 log = logging.getLogger("zorp")
 
 # ZORP zone defaults
-ZORP_RADIUS = 35  # meters (70m across)
+ZORP_RADIUS = 38.5  # meters (77m across)
 ZORP_COLOR_ONLINE = (0, 255, 0)    # green ring when owner online
 ZORP_COLOR_OFFLINE = (255, 0, 0)   # red ring when owner offline (protected)
 
