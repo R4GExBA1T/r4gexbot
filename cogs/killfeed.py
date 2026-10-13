@@ -261,11 +261,22 @@ class Killfeed(commands.Cog):
 
         # Scrap reward (with anti-farm)
         awarded = await self._award_kill_scrap(killer, victim, now)
-        # Post a rich embed to killfeed channels
+        # Post a rich embed + rendered kill card to killfeed channels
         kstats = await self._get_stats(killer)
         embed = self._build_kill_embed(killer, victim, kstats,
                                          victim_streak, awarded, now)
-        await self._post_killfeed(embed)
+        card_path = None
+        try:
+            from services import killcard
+            card_path = killcard.render(
+                killer, victim,
+                kills=(kstats or {}).get("kills", 0),
+                deaths=(kstats or {}).get("deaths", 0),
+                streak=(kstats or {}).get("current_streak", 0),
+                victim_streak=victim_streak, awarded=awarded)
+        except Exception as e:
+            log.warning(f"Killfeed: card render failed: {e}")
+        await self._post_killfeed(embed, card_path)
         # And announce it in the game chat itself
         await self._broadcast_ingame(
             killer, victim, (kstats or {}).get("current_streak", 0),
@@ -382,16 +393,10 @@ class Killfeed(commands.Cog):
         else:
             color = 0x8B00FF  # R4GE purple
 
-        # Coloured banner: killer's name PURPLE, victim's name RED.
-        # Discord has no per-word text colour in embeds, so the names ride
-        # in an ANSI code block (35 = magenta/purple, 31 = red).
-        def _ansi(name: str, code: str) -> str:
-            safe = name.replace("`", "'")
-            return f"\u001b[1;{code}m{safe}\u001b[0m"
-
-        banner = (f"```ansi\n{_ansi(killer, '35')}  ⚔️  "
-                  f"{_ansi(victim, '31')}\n```")
-        lines = ["💀 **ELIMINATED**", banner]
+        # The coloured names live on the rendered kill card image (ANSI
+        # text colour doesn't render on every Discord client); this text
+        # is the fallback that rides alongside it.
+        lines = [f"💀 **{killer}** eliminated **{victim}**"]
         callout = self._streak_callout(streak)
         if callout:
             lines.append(callout)
@@ -399,15 +404,9 @@ class Killfeed(commands.Cog):
             lines.append(
                 f"💥 Ended **{victim}**'s {victim_streak}-kill streak!")
 
+        # Stats ride on the kill card image; the embed is its frame.
         em = discord.Embed(description="\n".join(lines), color=color,
                            timestamp=now)
-        killer_line = f"{kills}K / {deaths}D • {kd:.2f} K/D"
-        if streak >= 2:
-            killer_line += f" • 🔥 {streak} streak"
-        em.add_field(name="🎯 Killer", value=killer_line, inline=True)
-        if awarded > 0:
-            em.add_field(name="🪙 Reward", value=f"+{awarded} Scrap",
-                         inline=True)
         em.set_footer(text=f"R4GE 3X — Kill #{kills}")
         return em
 
@@ -428,12 +427,10 @@ class Killfeed(commands.Cog):
             def safe(name: str) -> str:
                 return name.replace('"', "'").replace("\n", " ").strip()
 
-            # Rich-text colour tags: killer PURPLE, victim RED
-            def cname(name: str, hexcolor: str) -> str:
-                return f"<color={hexcolor}>{safe(name)}</color>"
-
-            kname = cname(killer, "#B366FF")
-            vname = cname(victim, "#FF3333")
+            # Plain names only: the console chat filter censors rich-text
+            # colour tags (they came through as asterisks in testing).
+            kname = safe(killer)
+            vname = safe(victim)
 
             line = f"[KILLFEED] {kname} eliminated {vname}"
             if awarded > 0:
@@ -451,19 +448,37 @@ class Killfeed(commands.Cog):
         except Exception as e:
             log.warning(f"Killfeed: in-game broadcast failed: {e}")
 
-    async def _post_killfeed(self, embed: discord.Embed) -> None:
-        for guild in self.bot.guilds:
-            ch_id = await self._cfg_int(guild.id, "killfeed_channel", 0)
-            ch = guild.get_channel(ch_id) if ch_id else None
-            if ch is None:
-                # No channel configured — fall back to a #killfeed channel
-                # so the feed works out of the box (/config still overrides)
-                ch = discord.utils.get(guild.text_channels, name="killfeed")
-            if ch:
+    async def _post_killfeed(self, embed: discord.Embed,
+                             card_path: str | None = None) -> None:
+        try:
+            for guild in self.bot.guilds:
+                ch_id = await self._cfg_int(guild.id, "killfeed_channel", 0)
+                ch = guild.get_channel(ch_id) if ch_id else None
+                if ch is None:
+                    # No channel configured — fall back to a #killfeed
+                    # channel so the feed works out of the box
+                    # (/config still overrides)
+                    ch = discord.utils.get(guild.text_channels,
+                                           name="killfeed")
+                if ch:
+                    try:
+                        if card_path:
+                            embed.set_image(
+                                url="attachment://killcard.png")
+                            await ch.send(
+                                embed=embed,
+                                file=discord.File(card_path,
+                                                  filename="killcard.png"))
+                        else:
+                            await ch.send(embed=embed)
+                    except Exception as e:
+                        log.warning(f"Killfeed: failed to post: {e}")
+        finally:
+            if card_path:
                 try:
-                    await ch.send(embed=embed)
-                except Exception as e:
-                    log.warning(f"Killfeed: failed to post: {e}")
+                    os.remove(card_path)
+                except OSError:
+                    pass
 
     async def pay_pending_scrap(self, gamertag: str, discord_id: int) -> int:
         """Pay out banked kill Scrap when a player links. Returns amount paid."""
