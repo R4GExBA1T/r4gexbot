@@ -225,7 +225,7 @@ class Killfeed(commands.Cog):
                 from services.economy import EconomyService
                 # Find linked Discord user for the killer
                 cur = await db.execute(
-                    "SELECT user_id FROM links WHERE gamertag = ?",
+                    "SELECT discord_id FROM links WHERE gamertag = ?",
                     (killer.lower(),))
                 row = await cur.fetchone()
                 if row:

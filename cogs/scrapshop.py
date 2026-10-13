@@ -149,7 +149,7 @@ class QuantityModal(discord.ui.Modal, title="Choose Quantity"):
             return
 
         cur = await econ.db.execute(
-            "SELECT gamertag FROM links WHERE user_id = ?",
+            "SELECT gamertag FROM links WHERE discord_id = ?",
             (self.user_id,))
         row = await cur.fetchone()
         if not row:
@@ -357,7 +357,7 @@ class ScrapShop(commands.Cog):
     async def _scrapshop_inner(self, interaction: discord.Interaction):
         # Check linked
         cur = await self.bot.economy.db.execute(
-            "SELECT gamertag FROM links WHERE user_id = ?",
+            "SELECT gamertag FROM links WHERE discord_id = ?",
             (interaction.user.id,))
         if not await cur.fetchone():
             await interaction.followup.send(
