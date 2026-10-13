@@ -110,36 +110,36 @@ class ItemSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, view=view)
 
 
-class QuantitySelect(discord.ui.Select):
-    """Dropdown to choose quantity."""
+class QuantityModal(discord.ui.Modal, title="Choose Quantity"):
+    """Modal for typing a custom quantity (1-10)."""
+
+    quantity = discord.ui.TextInput(
+        label="Quantity (1-10)",
+        placeholder="Enter 1-10...",
+        min_length=1,
+        max_length=2,
+    )
 
     def __init__(self, cog, item: tuple, user_id: int):
+        super().__init__()
         self.cog = cog
-        self.item = item  # (id, name, shortname, qty, price)
+        self.item = item
         self.user_id = user_id
-        _, name, _, qty, price = item
-        options = []
-        for mult in [1, 2, 3, 5, 10]:
-            total_price = price * mult
-            total_qty = qty * mult
-            options.append(discord.SelectOption(
-                label=f"x{mult} — {total_price} Scrap",
-                description=f"Get {total_qty}x ({name})",
-                value=str(mult),
-            ))
-        super().__init__(
-            placeholder="Choose quantity...",
-            options=options,
-            custom_id="shop_qty_select",
-        )
 
-    async def callback(self, interaction: discord.Interaction):
-        mult = int(self.values[0])
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            mult = int(self.quantity.value.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Enter a number 1-10.", ephemeral=True)
+            return
+        if not 1 <= mult <= 10:
+            await interaction.response.send_message(
+                "❌ Quantity must be 1-10.", ephemeral=True)
+            return
         item_id, name, shortname, qty, price = self.item
         total_price = price * mult
-        total_qty = qty * mult
 
-        # Check balance
         econ = self.cog.bot.economy
         balance = await econ.get_balance(self.user_id)
         if balance < total_price:
@@ -148,7 +148,6 @@ class QuantitySelect(discord.ui.Select):
                 ephemeral=True)
             return
 
-        # Check linked gamertag
         cur = await econ.db.execute(
             "SELECT gamertag FROM links WHERE user_id = ?",
             (self.user_id,))
@@ -160,7 +159,6 @@ class QuantitySelect(discord.ui.Select):
             return
         gamertag = row[0]
 
-        # Confirm purchase
         view = ConfirmView(self.cog, self.item, mult, self.user_id, gamertag)
         embed = discord.Embed(
             title="🛒 Confirm Purchase",
@@ -218,11 +216,20 @@ class ShopView(discord.ui.View):
 
 
 class QuantityView(discord.ui.View):
-    """Quantity selection view."""
+    """Quantity selection view with type-in button."""
 
     def __init__(self, cog, item: tuple, user_id: int):
         super().__init__(timeout=120)
-        self.add_item(QuantitySelect(cog, item, user_id))
+        self.cog = cog
+        self.item = item
+        self.user_id = user_id
+
+    @discord.ui.button(label="⌨️ Enter Quantity (1-10)",
+                       style=discord.ButtonStyle.primary)
+    async def enter_qty(self, interaction: discord.Interaction,
+                        button: discord.ui.Button):
+        await interaction.response.send_modal(
+            QuantityModal(self.cog, self.item, self.user_id))
 
 
 class ScrapShop(commands.Cog):
