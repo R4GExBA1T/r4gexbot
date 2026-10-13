@@ -184,6 +184,17 @@ class Zorp(commands.Cog):
     def _normalize_wheel(self, text: str) -> str:
         """Normalize wheel broadcast to a plain phrase."""
         tl = text.lower()
+        # Rust Console chat-wheel localization keys (from live RCON capture)
+        # "Can I build around here?" = Questions slot 1
+        # "Yes" = Responses slot 0
+        # "Goodbye" = Responses slot 6
+        if "quick_chat_questions_slot_1" in tl:
+            return "can i build around here?"
+        if "quick_chat_responses_slot_0" in tl:
+            return "yes"
+        if "quick_chat_responses_slot_6" in tl:
+            return "goodbye"
+        # Plain-text fallback (typed chat)
         if "can i build" in tl or "build around here" in tl:
             return "can i build around here?"
         if re.search(r'\byes\b', tl):
