@@ -124,8 +124,8 @@ class Zorp(commands.Cog):
             ("showarea", "1"),
             ("color", f"({r},{g},{b})"),
             ("showchatmessage", "1"),
-            ("entermessage", f"entering \\\"{gamertag}'s\\\" ZORP"),
-            ("leavemessage", f"Leaving \\\"{gamertag}'s\\\" Zorp"),
+            ("entermessage", f"Entering \\\"{gamertag}'s\\\" ZORP"),
+            ("leavemessage", f"Leaving \\\"{gamertag}'s\\\" ZORP"),
         ]
         for setting, value in edits:
             try:
