@@ -6,7 +6,7 @@ Player flow (in-game chat wheel):
   3. Player: "Yes" (wheel) -> ZORP created at their current position.
      Player: "Goodbye" (wheel) -> their ZORP is deleted.
   4. Protection auto-toggles: building damage BLOCKED when offline,
-     ALLOWED when online (purple ring always visible).
+     ALLOWED when online. Ring is green when owner online, red when offline.
 
 Mechanism: Rust Console native custom zones via RCON.
 Position: server.printpos "<gamertag>" -> (x, y, z).
@@ -27,7 +27,8 @@ log = logging.getLogger("zorp")
 
 # ZORP zone defaults
 ZORP_RADIUS = 40  # meters
-ZORP_COLOR = (128, 0, 128)  # purple
+ZORP_COLOR_ONLINE = (0, 255, 0)    # green ring when owner online
+ZORP_COLOR_OFFLINE = (255, 0, 0)   # red ring when owner offline (protected)
 
 
 class Zorp(commands.Cog):
@@ -125,8 +126,8 @@ class Zorp(commands.Cog):
             log.warning(f"ZORP: create failed for {gamertag}: {e}")
             return (False, "Failed to create ZORP zone. Try again.")
 
-        # Configure: purple ring, visible, enter/leave messages
-        r, g, b = ZORP_COLOR
+        # Configure: green ring (owner online at creation), visible, enter/leave messages
+        r, g, b = ZORP_COLOR_ONLINE
         edits = [
             ("showarea", "1"),
             ("color", f"({r},{g},{b})"),
@@ -153,39 +154,92 @@ class Zorp(commands.Cog):
              now.isoformat(), expires.isoformat()))
         await self.bot.economy.db.commit()
         log.info(f"ZORP: created {zone} at ({x:.1f},{y:.1f},{z:.1f}) for {gamertag}, expires {expires.isoformat()}")
-        return (True, f"ZORP created! Purple ring marks your protected zone ({ZORP_RADIUS}m). Protection activates when you log off. Expires in 24h unless you come online.")
+        return (True, f"ZORP created! Green ring while you're online — turns red with protection when you log off ({ZORP_RADIUS}m). Expires in 24h unless you come online.")
 
     async def delete_zorp(self, gamertag: str) -> tuple[bool, str]:
-        """Delete a player's ZORP zone."""
+        """Delete a player's ZORP zone.
+
+        Works even if the DB lost track of it: falls back to the expected
+        in-game zone name (zorp_<gamertag>) so orphaned zones can be removed.
+        """
         cur = await self.bot.economy.db.execute(
             "SELECT zone_name FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
         row = await cur.fetchone()
+        zone = row[0] if row else self._zone_name(gamertag)
+        # If no DB row, confirm the orphaned zone actually exists in-game
         if not row:
-            return (False, "You don't have a ZORP to remove.")
-        zone = row[0]
+            try:
+                zones_resp = await rcon.send_command(
+                    "zones.listcustomzones", timeout=10.0)
+                if not zones_resp or zone not in zones_resp:
+                    return (False, "You don't have a ZORP to remove.")
+            except Exception as e:
+                log.warning(f"ZORP: zone list check failed: {e}")
+                return (False, "Couldn't check in-game zones, try again.")
         try:
             resp = await rcon.send_command(
                 f'zones.deletecustomzone "{zone}"', timeout=10.0)
             log.info(f"ZORP: delete RCON response for {zone}: {resp[:200] if resp else 'empty'}")
         except Exception as e:
             log.warning(f"ZORP: delete failed for {zone}: {e}")
-            return (False, f"Failed to delete ZORP zone in-game: {e}. "
-                           f"Zone kept in DB, try again.")
+            return (False, f"Failed to delete ZORP zone in-game: {e}. Try again.")
         # Verify deletion by listing zones
         try:
             zones_resp = await rcon.send_command("zones.listcustomzones", timeout=10.0)
             if zones_resp and zone in zones_resp:
                 log.warning(f"ZORP: {zone} still in zones list after delete!")
-                return (False, f"ZORP zone still exists in-game after delete. "
-                               f"Not removing from DB.")
+                return (False, "ZORP zone still exists in-game after delete. "
+                               "Not removing from DB.")
         except Exception as e:
             log.warning(f"ZORP: could not verify deletion for {zone}: {e}")
             # Continue anyway — don't block on verification failure
-        await self.bot.economy.db.execute(
-            "DELETE FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
-        await self.bot.economy.db.commit()
+        if row:
+            await self.bot.economy.db.execute(
+                "DELETE FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
+            await self.bot.economy.db.commit()
         log.info(f"ZORP: deleted {zone} for {gamertag}")
         return (True, "Your ZORP has been removed.")
+
+    async def adopt_zorp(self, gamertag: str) -> tuple[bool, str]:
+        """Re-link an existing in-game zone to the DB (fixes DB/in-game desync)."""
+        zone = self._zone_name(gamertag)
+        try:
+            resp = await rcon.send_command("zones.listcustomzones", timeout=15.0)
+        except Exception as e:
+            return (False, f"Couldn't list in-game zones: {e}")
+        if not resp or zone not in resp:
+            return (False, f"No in-game zone `{zone}` found for {gamertag}.")
+        # Try to extract position from the zone listing
+        x = y = z = 0.0
+        m = re.search(rf"{re.escape(zone)}[^\n]*\(([\d\.\-]+),"
+                      r"([\d\.\-]+),([\d\.\-]+)\)", resp)
+        if m:
+            try:
+                x, y, z = float(m.group(1)), float(m.group(2)), float(m.group(3))
+            except ValueError:
+                pass
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(hours=24)
+        await self.bot.economy.db.execute(
+            """INSERT OR REPLACE INTO zorps
+               (gamertag, zone_name, x, y, z, radius, created_at, protection_on, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+            (gamertag.lower(), zone, x, y, z, ZORP_RADIUS,
+             now.isoformat(), expires.isoformat()))
+        await self.bot.economy.db.commit()
+        log.info(f"ZORP: adopted in-game zone {zone} for {gamertag}")
+        return (True, f"Adopted in-game zone `{zone}` for {gamertag} — "
+                      "poller will now manage its protection and color.")
+
+    async def set_color(self, zone_name: str, online: bool) -> None:
+        """Set ring color: green when owner online, red when offline."""
+        r, g, b = ZORP_COLOR_ONLINE if online else ZORP_COLOR_OFFLINE
+        try:
+            await rcon.send_command(
+                f'zones.editcustomzone "{zone_name}" color "({r},{g},{b})"',
+                timeout=10.0)
+        except Exception as e:
+            log.warning(f"ZORP: color set failed for {zone_name}: {e}")
 
     async def set_protection(self, gamertag: str, zone_name: str, on: bool) -> None:
         """Toggle building-damage protection (on = blocked when offline)."""
@@ -336,6 +390,8 @@ class Zorp(commands.Cog):
                 want_on = not is_online
                 if bool(protection_on) != want_on:
                     await self.set_protection(gamertag, zone_name, want_on)
+                # Ring color: green when owner online, red when offline (protected)
+                await self.set_color(zone_name, is_online)
         except Exception as e:
             log.warning(f"ZORP: poller error: {e}")
 
@@ -357,6 +413,7 @@ class Zorp(commands.Cog):
         app_commands.Choice(name="List all ZORPs", value="list"),
         app_commands.Choice(name="Delete a player's ZORP", value="delete"),
         app_commands.Choice(name="Debug: DB vs in-game zones", value="debug"),
+        app_commands.Choice(name="Adopt existing in-game zone", value="adopt"),
     ])
     async def zorp(self, interaction: discord.Interaction,
                    action: str, player: str = ""):
@@ -401,6 +458,12 @@ class Zorp(commands.Cog):
             lines.append(f"\n**In-game zones:**")
             lines.append(f"```{zones_resp[:1500] if zones_resp else '(empty)'}```")
             await interaction.followup.send("\n".join(lines), ephemeral=True)
+        elif action == "adopt":
+            if not player:
+                await interaction.followup.send("Provide a player gamertag.", ephemeral=True)
+                return
+            ok, msg = await self.adopt_zorp(player)
+            await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
