@@ -240,6 +240,10 @@ class Killfeed(commands.Cog):
             await self._on_suicide(victim)
             return
 
+        # Victim's streak before it gets wiped (for "streak ended" callouts)
+        vstats = await self._get_stats(victim)
+        victim_streak = (vstats or {}).get("current_streak", 0)
+
         # PvP kill
         await self._ensure_stats(killer)
         await db.execute(
@@ -256,9 +260,12 @@ class Killfeed(commands.Cog):
         log.info(f"Killfeed: {killer} killed {victim}")
 
         # Scrap reward (with anti-farm)
-        await self._award_kill_scrap(killer, victim, now)
-        # Post to killfeed channels
-        await self._post_killfeed(f"💀 **{killer}** killed **{victim}**")
+        awarded = await self._award_kill_scrap(killer, victim, now)
+        # Post a rich embed to killfeed channels
+        kstats = await self._get_stats(killer)
+        embed = self._build_kill_embed(killer, victim, kstats,
+                                         victim_streak, awarded, now)
+        await self._post_killfeed(embed)
 
     async def _on_suicide(self, victim: str) -> None:
         if not victim:
@@ -296,8 +303,11 @@ class Killfeed(commands.Cog):
                 await self.bot.economy.db.commit()
 
     async def _award_kill_scrap(self, killer: str, victim: str,
-                                now: datetime) -> None:
-        """Pay Scrap for a PvP kill, with anti-farm protection."""
+                                now: datetime) -> int:
+        """Pay Scrap for a PvP kill, with anti-farm protection.
+
+        Returns the amount actually awarded (0 if anti-farm blocked it).
+        """
         # Anti-farm: same killer -> same victim within window = no Scrap
         cutoff = (now - timedelta(minutes=ANTI_FARM_MINUTES)).isoformat()
         cur = await self.bot.economy.db.execute(
@@ -307,7 +317,7 @@ class Killfeed(commands.Cog):
         row = await cur.fetchone()
         if row and row[0] > 0:
             log.info(f"Killfeed: anti-farm blocked Scrap for {killer} -> {victim}")
-            return
+            return 0
 
         # Find a guild with kill rewards enabled to get the amount
         amount = 10
@@ -316,7 +326,7 @@ class Killfeed(commands.Cog):
             if amount > 0:
                 break
         if amount <= 0:
-            return
+            return 0
 
         db = self.bot.economy.db
         discord_id = await self._discord_id_for(killer)
@@ -329,6 +339,7 @@ class Killfeed(commands.Cog):
                 log.info(f"Killfeed: +{amount} Scrap to {killer} (discord {discord_id})")
             except Exception as e:
                 log.warning(f"Killfeed: failed to pay {killer}: {e}")
+                return 0
         else:
             # Bank it until they link with /linkrust
             await db.execute(
@@ -336,8 +347,67 @@ class Killfeed(commands.Cog):
                 " WHERE gamertag = ?", (amount, killer))
             log.info(f"Killfeed: banked +{amount} Scrap for unlinked {killer}")
         await db.commit()
+        return amount
 
-    async def _post_killfeed(self, text: str) -> None:
+    @staticmethod
+    def _streak_callout(streak: int) -> str | None:
+        if streak >= 10:
+            return "👑 **UNSTOPPABLE** — double-digit kill streak!"
+        if streak >= 7:
+            return "☠️ **ON A TEAR** — 7-kill streak!"
+        if streak >= 5:
+            return "⚡ **RAMPAGE** — 5-kill streak!"
+        if streak >= 3:
+            return "🔥 Heating up — 3-kill streak"
+        return None
+
+    def _build_kill_embed(self, killer: str, victim: str,
+                          kstats: dict | None, victim_streak: int,
+                          awarded: int, now: datetime) -> discord.Embed:
+        """The live killfeed post — built to pop."""
+        kills = (kstats or {}).get("kills", 0)
+        deaths = (kstats or {}).get("deaths", 0)
+        streak = (kstats or {}).get("current_streak", 0)
+        kd = (kills / deaths) if deaths else float(kills)
+
+        # Colour escalates with the killer's streak
+        if streak >= 10:
+            color = 0xFF0000
+        elif streak >= 5:
+            color = 0xFF6B00
+        else:
+            color = 0x8B00FF  # R4GE purple
+
+        # Coloured banner: killer's name PURPLE, victim's name RED.
+        # Discord has no per-word text colour in embeds, so the names ride
+        # in an ANSI code block (35 = magenta/purple, 31 = red).
+        def _ansi(name: str, code: str) -> str:
+            safe = name.replace("`", "'")
+            return f"\u001b[1;{code}m{safe}\u001b[0m"
+
+        banner = (f"```ansi\n{_ansi(killer, '35')}  ⚔️  "
+                  f"{_ansi(victim, '31')}\n```")
+        lines = ["💀 **ELIMINATED**", banner]
+        callout = self._streak_callout(streak)
+        if callout:
+            lines.append(callout)
+        if victim_streak >= 3:
+            lines.append(
+                f"💥 Ended **{victim}**'s {victim_streak}-kill streak!")
+
+        em = discord.Embed(description="\n".join(lines), color=color,
+                           timestamp=now)
+        killer_line = f"{kills}K / {deaths}D • {kd:.2f} K/D"
+        if streak >= 2:
+            killer_line += f" • 🔥 {streak} streak"
+        em.add_field(name="🎯 Killer", value=killer_line, inline=True)
+        if awarded > 0:
+            em.add_field(name="🪙 Reward", value=f"+{awarded} Scrap",
+                         inline=True)
+        em.set_footer(text=f"R4GE 3X — Kill #{kills}")
+        return em
+
+    async def _post_killfeed(self, embed: discord.Embed) -> None:
         for guild in self.bot.guilds:
             ch_id = await self._cfg_int(guild.id, "killfeed_channel", 0)
             if not ch_id:
@@ -345,7 +415,7 @@ class Killfeed(commands.Cog):
             ch = guild.get_channel(ch_id)
             if ch:
                 try:
-                    await ch.send(text)
+                    await ch.send(embed=embed)
                 except Exception as e:
                     log.warning(f"Killfeed: failed to post: {e}")
 
