@@ -212,6 +212,30 @@ class Killfeed(commands.Cog):
             log.info(f"Killfeed: {victim} died to {killer or 'environment'}")
             return
 
+        if is_npc(victim) and killer and not is_npc(killer):
+            # Player killed an NPC (scientist) — 20 Scrap reward, no K/D change
+            await self._ensure_stats(killer)
+            try:
+                npc_scrap = 20
+                await db.execute(
+                    "UPDATE player_stats SET kill_scrap = kill_scrap + ?"
+                    " WHERE gamertag = ?", (npc_scrap, killer.lower()))
+                await db.commit()
+                # Bank the Scrap if linked
+                from services.economy import EconomyService
+                # Find linked Discord user for the killer
+                cur = await db.execute(
+                    "SELECT user_id FROM links WHERE gamertag = ?",
+                    (killer.lower(),))
+                row = await cur.fetchone()
+                if row:
+                    econ = self.bot.economy
+                    await econ.add_scrap(row[0], npc_scrap)
+                log.info(f"Killfeed: {killer} killed NPC {victim} (+{npc_scrap} Scrap)")
+            except Exception as e:
+                log.warning(f"Killfeed: NPC kill reward failed: {e}")
+            return
+
         if killer.lower() == victim.lower():
             await self._on_suicide(victim)
             return
@@ -288,7 +312,7 @@ class Killfeed(commands.Cog):
         # Find a guild with kill rewards enabled to get the amount
         amount = 10
         for guild in self.bot.guilds:
-            amount = await self._cfg_int(guild.id, "kill_scrap", 10)
+            amount = await self._cfg_int(guild.id, "kill_scrap", 50)
             if amount > 0:
                 break
         if amount <= 0:

@@ -71,7 +71,7 @@ SETTINGS = {
                     "0", True),
     "kill_scrap": ("💀 Scrap Per Kill",
                    "Scrap paid for each PvP kill. 0 turns it off.",
-                   "10", True),
+                   "50", True),
     "raidprotect_hours": ("🛡️ Raid Protection Hours",
                    "How long new players are protected from being raided after first joining.",
                    "24", True),

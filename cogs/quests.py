@@ -22,9 +22,7 @@ QUEST_POOL = {
         ("claim_quest", "📋 Check your quests", "Open /quests (free!)", 1, 10),
     ],
     "weekly": [
-        ("gamble_25", "🎰 High Roller", "Place 25 bets this week", 25, 200),
-        ("clan_active", "🏰 Clan Loyalist", "Be in a clan (auto)", 1, 100),
-        ("rich", "💰 Scrap Hoarder", "Hold 1000+ Scrap at once", 1, 150),
+        # Weekly quests disabled — daily only
     ],
 }
 
