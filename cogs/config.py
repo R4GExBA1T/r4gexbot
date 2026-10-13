@@ -59,7 +59,7 @@ SETTINGS = {
                         "140", True),
     "clan_cost": ("🏰 Clan Cost",
                   "How much Scrap it costs to create a clan.",
-                  "50", True),
+                  "25", True),
     "welcome_channel": ("👋 Welcome Channel",
                         "Channel ID for welcome messages. 0 turns it off.\nRight-click a channel → Copy Channel ID (Developer Mode on).",
                         "0", True),
