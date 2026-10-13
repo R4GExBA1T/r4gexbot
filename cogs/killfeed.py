@@ -410,9 +410,11 @@ class Killfeed(commands.Cog):
     async def _post_killfeed(self, embed: discord.Embed) -> None:
         for guild in self.bot.guilds:
             ch_id = await self._cfg_int(guild.id, "killfeed_channel", 0)
-            if not ch_id:
-                continue
-            ch = guild.get_channel(ch_id)
+            ch = guild.get_channel(ch_id) if ch_id else None
+            if ch is None:
+                # No channel configured — fall back to a #killfeed channel
+                # so the feed works out of the box (/config still overrides)
+                ch = discord.utils.get(guild.text_channels, name="killfeed")
             if ch:
                 try:
                     await ch.send(embed=embed)
