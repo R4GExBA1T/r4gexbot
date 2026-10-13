@@ -62,9 +62,16 @@ class Zorp(commands.Cog):
                 x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
                 radius REAL NOT NULL DEFAULT 40,
                 created_at TEXT NOT NULL,
-                protection_on INTEGER NOT NULL DEFAULT 1
+                protection_on INTEGER NOT NULL DEFAULT 1,
+                expires_at TEXT
             )
         """)
+        # Add expires_at to existing tables
+        try:
+            await self.bot.economy.db.execute(
+                "ALTER TABLE zorps ADD COLUMN expires_at TEXT")
+        except Exception:
+            pass  # Column already exists
         await self.bot.economy.db.commit()
 
     # ------------------------------------------------------------------
@@ -135,15 +142,18 @@ class Zorp(commands.Cog):
                 log.warning(f"ZORP: edit {setting} failed for {zone}: {e}")
 
         # Save to DB (protection starts ON — assume offline until poller confirms)
+        # ZORP expires 24h after creation unless owner comes online (timer resets)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(hours=24)
         await self.bot.economy.db.execute(
             """INSERT OR REPLACE INTO zorps
-               (gamertag, zone_name, x, y, z, radius, created_at, protection_on)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+               (gamertag, zone_name, x, y, z, radius, created_at, protection_on, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)""",
             (gamertag.lower(), zone, x, y, z, ZORP_RADIUS,
-             datetime.now(timezone.utc).isoformat()))
+             now.isoformat(), expires.isoformat()))
         await self.bot.economy.db.commit()
-        log.info(f"ZORP: created {zone} at ({x:.1f},{y:.1f},{z:.1f}) for {gamertag}")
-        return (True, f"ZORP created! Purple ring marks your protected zone ({ZORP_RADIUS}m). Protection activates when you log off.")
+        log.info(f"ZORP: created {zone} at ({x:.1f},{y:.1f},{z:.1f}) for {gamertag}, expires {expires.isoformat()}")
+        return (True, f"ZORP created! Purple ring marks your protected zone ({ZORP_RADIUS}m). Protection activates when you log off. Expires in 24h unless you come online.")
 
     async def delete_zorp(self, gamertag: str) -> tuple[bool, str]:
         """Delete a player's ZORP zone."""
@@ -252,10 +262,12 @@ class Zorp(commands.Cog):
     # ------------------------------------------------------------------
     @tasks.loop(minutes=5)
     async def protection_poller(self):
-        """Every 5 min: protection ON for offline players, OFF for online."""
+        """Every 5 min: protection ON for offline players, OFF for online.
+        ZORP expires 24h after creation unless owner comes online (timer resets).
+        """
         try:
             cur = await self.bot.economy.db.execute(
-                "SELECT gamertag, zone_name, protection_on FROM zorps")
+                "SELECT gamertag, zone_name, protection_on, expires_at FROM zorps")
             zorps = await cur.fetchall()
             if not zorps:
                 return
@@ -274,8 +286,38 @@ class Zorp(commands.Cog):
                 log.warning(f"ZORP: playerlist poll failed: {e}")
                 return
 
-            for gamertag, zone_name, protection_on in zorps:
+            now = datetime.now(timezone.utc)
+            for gamertag, zone_name, protection_on, expires_at in zorps:
                 is_online = gamertag.lower() in online
+
+                # If owner is online, reset the 24h expiration timer
+                if is_online:
+                    new_expires = now + timedelta(hours=24)
+                    await self.bot.economy.db.execute(
+                        "UPDATE zorps SET expires_at = ? WHERE gamertag = ?",
+                        (new_expires.isoformat(), gamertag))
+                    await self.bot.economy.db.commit()
+                    log.debug(f"ZORP: {gamertag} online, expiration reset to {new_expires.isoformat()}")
+                else:
+                    # Owner offline: check if ZORP expired
+                    if expires_at:
+                        try:
+                            exp = datetime.fromisoformat(expires_at)
+                            if exp.tzinfo is None:
+                                exp = exp.replace(tzinfo=timezone.utc)
+                            if now >= exp:
+                                log.info(f"ZORP: {gamertag}'s ZORP expired after 24h offline, deleting")
+                                await self.delete_zorp(gamertag)
+                                try:
+                                    await rcon.send_command(
+                                        f'say "{gamertag}\'s ZORP has expired after 24 hours."',
+                                        timeout=10.0)
+                                except Exception:
+                                    pass
+                                continue
+                        except (ValueError, TypeError) as e:
+                            log.warning(f"ZORP: bad expires_at for {gamertag}: {e}")
+
                 # Protection ON when offline, OFF when online
                 want_on = not is_online
                 if bool(protection_on) != want_on:
