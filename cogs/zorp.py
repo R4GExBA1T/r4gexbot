@@ -164,9 +164,23 @@ class Zorp(commands.Cog):
             return (False, "You don't have a ZORP to remove.")
         zone = row[0]
         try:
-            await rcon.send_command(f'zones.deletecustomzone "{zone}"', timeout=10.0)
+            resp = await rcon.send_command(
+                f'zones.deletecustomzone "{zone}"', timeout=10.0)
+            log.info(f"ZORP: delete RCON response for {zone}: {resp[:200] if resp else 'empty'}")
         except Exception as e:
             log.warning(f"ZORP: delete failed for {zone}: {e}")
+            return (False, f"Failed to delete ZORP zone in-game: {e}. "
+                           f"Zone kept in DB, try again.")
+        # Verify deletion by listing zones
+        try:
+            zones_resp = await rcon.send_command("zones.listcustomzones", timeout=10.0)
+            if zones_resp and zone in zones_resp:
+                log.warning(f"ZORP: {zone} still in zones list after delete!")
+                return (False, f"ZORP zone still exists in-game after delete. "
+                               f"Not removing from DB.")
+        except Exception as e:
+            log.warning(f"ZORP: could not verify deletion for {zone}: {e}")
+            # Continue anyway — don't block on verification failure
         await self.bot.economy.db.execute(
             "DELETE FROM zorps WHERE gamertag = ?", (gamertag.lower(),))
         await self.bot.economy.db.commit()
@@ -342,6 +356,7 @@ class Zorp(commands.Cog):
     @app_commands.choices(action=[
         app_commands.Choice(name="List all ZORPs", value="list"),
         app_commands.Choice(name="Delete a player's ZORP", value="delete"),
+        app_commands.Choice(name="Debug: DB vs in-game zones", value="debug"),
     ])
     async def zorp(self, interaction: discord.Interaction,
                    action: str, player: str = ""):
@@ -368,6 +383,24 @@ class Zorp(commands.Cog):
                 return
             ok, msg = await self.delete_zorp(player)
             await interaction.followup.send(msg, ephemeral=True)
+        elif action == "debug":
+            # Show DB zorps vs in-game zones
+            cur = await self.bot.economy.db.execute(
+                "SELECT gamertag, zone_name FROM zorps")
+            db_zorps = await cur.fetchall()
+            try:
+                zones_resp = await rcon.send_command(
+                    "zones.listcustomzones", timeout=15.0)
+            except Exception as e:
+                await interaction.followup.send(
+                    f"❌ Failed to list in-game zones: {e}", ephemeral=True)
+                return
+            lines = [f"**DB ({len(db_zorps)}):**"]
+            for gt, zn in db_zorps:
+                lines.append(f"  {gt} → `{zn}`")
+            lines.append(f"\n**In-game zones:**")
+            lines.append(f"```{zones_resp[:1500] if zones_resp else '(empty)'}```")
+            await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
