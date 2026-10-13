@@ -454,12 +454,15 @@ class Killfeed(commands.Cog):
         em.set_footer(text=f"R4GE 3X — Kill #{kills}")
         return em
 
-    # Milestone streak -> in-game hype line (fires once, at the milestone)
+    # Milestone streak -> in-game hype line (fires once, at the milestone).
+    # NOTE: wording deliberately avoids "kill"/"eliminated" etc. — the
+    # console platform chat filter censors those lines wholesale
+    # (they came through as asterisks in testing).
     _STREAK_HYPE = {
-        3: "is HEATING UP — 3-kill streak!",
-        5: "is on a RAMPAGE — 5-kill streak!",
-        7: "is ON A TEAR — 7-kill streak!",
-        10: "is UNSTOPPABLE — 10-kill streak!",
+        3: "is HEATING UP - 3 streak!",
+        5: "is on a RAMPAGE - 5 streak!",
+        7: "is ON A TEAR - 7 streak!",
+        10: "is UNSTOPPABLE - 10 streak!",
     }
 
     async def _broadcast_ingame(self, killer: str, victim: str, streak: int,
@@ -476,19 +479,19 @@ class Killfeed(commands.Cog):
             kname = safe(killer)
             vname = safe(victim)
 
-            line = f"[KILLFEED] {kname} eliminated {vname}"
+            line = f"[R4GE] {kname} dropped {vname}"
             if awarded > 0:
-                line += f" (+{awarded} Scrap)"
+                line += f" +{awarded} Scrap"
             await rcon_svc.send_command(f'say "{line}"')
 
             hype = self._STREAK_HYPE.get(streak)
             if hype:
                 await rcon_svc.send_command(
-                    f'say "[KILLFEED] {kname} {hype}"')
+                    f'say "[R4GE] {kname} {hype}"')
             if victim_streak >= 3:
                 await rcon_svc.send_command(
-                    f'say "[KILLFEED] {kname} ended '
-                    f"{vname}'s {victim_streak}-kill streak!\"")
+                    f'say "[R4GE] {kname} ended '
+                    f"{vname}'s {victim_streak} streak!\"")
         except Exception as e:
             log.warning(f"Killfeed: in-game broadcast failed: {e}")
 
