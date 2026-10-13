@@ -42,6 +42,23 @@ LEFT_RE = re.compile(r"^(.+?)\s+(left|disconnected)\b", re.IGNORECASE)
 ID_SUFFIX = re.compile(r"\[\d+\]\s*$")
 
 
+#: Killer/victim strings that are never real players (server entity deaths)
+_NON_PLAYER_NAMES = {"environment"}
+
+
+def _is_player_name(name: str) -> bool:
+    """True only for plausible player gamertags — rejects the server's
+    entity-death noise (killer 'environment', victims that are raw
+    numeric entity IDs), which otherwise floods the feed."""
+    if not name:
+        return False
+    if name.lower() in _NON_PLAYER_NAMES:
+        return False
+    if name.isdigit():
+        return False
+    return True
+
+
 def clean_name(raw: str) -> str:
     # RCON death messages can carry a trailing NUL (and other control
     # chars) on the final name — strip them or links lookups miss and
@@ -77,13 +94,16 @@ class Killfeed(commands.Cog):
                    best_streak INTEGER DEFAULT 0,
                    current_streak INTEGER DEFAULT 0,
                    first_seen TEXT,
-                   playtime_seconds INTEGER DEFAULT 0)""")
+                   playtime_seconds INTEGER DEFAULT 0,
+                   playtime_paid_blocks INTEGER DEFAULT 0)""")
         await db.execute(
             """CREATE TABLE IF NOT EXISTS kill_log (
                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                    killer TEXT, victim TEXT, ts TEXT, is_pvp INTEGER)""")
         await db.commit()
+        await self._migrate_playtime_column()
         await self._normalize_stat_names()
+        await self._purge_bogus_rows()
         if self._rcon_configured():
             self.kill_listener.start()
             log.info("Killfeed listener started")
@@ -93,6 +113,18 @@ class Killfeed(commands.Cog):
     async def cog_unload(self) -> None:
         self.kill_listener.cancel()
 
+    async def _migrate_playtime_column(self) -> None:
+        """Add playtime_paid_blocks to pre-existing player_stats tables."""
+        db = self.bot.economy.db
+        cur = await db.execute("PRAGMA table_info(player_stats)")
+        cols = {row[1] for row in await cur.fetchall()}
+        if "playtime_paid_blocks" not in cols:
+            await db.execute(
+                "ALTER TABLE player_stats ADD COLUMN"
+                " playtime_paid_blocks INTEGER DEFAULT 0")
+            await db.commit()
+            log.info("Killfeed: migrated player_stats (playtime_paid_blocks)")
+
     async def _normalize_stat_names(self) -> None:
         """One-time cleanup: merge player_stats rows whose gamertag has
         stray control chars (e.g. a trailing NUL from the RCON feed) into
@@ -101,10 +133,11 @@ class Killfeed(commands.Cog):
         db = self.bot.economy.db
         cur = await db.execute(
             "SELECT gamertag, kills, deaths, kill_scrap, pending_scrap,"
-            " best_streak, current_streak, first_seen, playtime_seconds"
+            " best_streak, current_streak, first_seen, playtime_seconds,"
+            " playtime_paid_blocks"
             " FROM player_stats")
         rows = await cur.fetchall()
-        for (gt, k, dth, ks, pend, best, cur_streak, first, play) in rows:
+        for (gt, k, dth, ks, pend, best, cur_streak, first, play, paid) in rows:
             clean = clean_name(gt)
             if clean == gt:
                 continue
@@ -112,8 +145,8 @@ class Killfeed(commands.Cog):
             await db.execute(
                 "INSERT INTO player_stats (gamertag, kills, deaths,"
                 " kill_scrap, pending_scrap, best_streak, current_streak,"
-                " first_seen, playtime_seconds)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " first_seen, playtime_seconds, playtime_paid_blocks)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(gamertag) DO UPDATE SET"
                 " kills = kills + excluded.kills,"
                 " deaths = deaths + excluded.deaths,"
@@ -123,8 +156,10 @@ class Killfeed(commands.Cog):
                 " current_streak = MAX(current_streak,"
                 " excluded.current_streak),"
                 " playtime_seconds = playtime_seconds"
-                " + excluded.playtime_seconds",
-                (clean, k, dth, ks, pend, best, cur_streak, first, play))
+                " + excluded.playtime_seconds,"
+                " playtime_paid_blocks = playtime_paid_blocks"
+                " + excluded.playtime_paid_blocks",
+                (clean, k, dth, ks, pend, best, cur_streak, first, play, paid))
             await db.execute(
                 "DELETE FROM player_stats WHERE gamertag = ?", (gt,))
             await db.commit()
@@ -137,6 +172,34 @@ class Killfeed(commands.Cog):
                     await self.pay_pending_scrap(clean, discord_id)
                     log.info(
                         f"Killfeed: paid {pending} banked Scrap to {clean}")
+
+    async def _purge_bogus_rows(self) -> None:
+        """Remove stats/kill-log rows created by non-player feed noise
+        (a stats row for 'environment' or all-numeric entity IDs, and
+        any PvP log rows they produced). Banked Scrap on those rows was
+        never paid to a real account, so it simply evaporates."""
+        db = self.bot.economy.db
+        cur = await db.execute("SELECT gamertag FROM player_stats")
+        bogus = [r[0] for r in await cur.fetchall()
+                 if not _is_player_name(r[0])]
+        for gt in bogus:
+            log.info(f"Killfeed: purging bogus stats row {gt!r}")
+            await db.execute(
+                "DELETE FROM player_stats WHERE gamertag = ?", (gt,))
+        # Kill-log sweep: a row is bogus when either side is feed noise
+        # (numeric ID, or 'environment' as a PvP killer) — EXCEPT the
+        # legit silent record of a real player dying to the environment
+        # (killer 'environment', victim a real gamertag, is_pvp = 0).
+        cur = await db.execute("SELECT id, killer, victim FROM kill_log")
+        for rid, k, v in await cur.fetchall():
+            k = k or ""
+            v = v or ""
+            if k.lower() == "environment" and _is_player_name(v):
+                continue
+            if (_is_player_name(k) or is_npc(k)) and _is_player_name(v):
+                continue
+            await db.execute("DELETE FROM kill_log WHERE id = ?", (rid,))
+        await db.commit()
 
     def _rcon_configured(self) -> bool:
         return bool(os.getenv("RCON_HOST") and os.getenv("RCON_PORT")
@@ -221,7 +284,7 @@ class Killfeed(commands.Cog):
         await self._ensure_stats(gamertag)
         cur = await self.bot.economy.db.execute(
             "SELECT kills, deaths, kill_scrap, pending_scrap, best_streak,"
-            " current_streak, first_seen, playtime_seconds"
+            " current_streak, first_seen, playtime_seconds, playtime_paid_blocks"
             " FROM player_stats WHERE gamertag = ?", (gamertag,))
         row = await cur.fetchone()
         if not row:
@@ -230,7 +293,7 @@ class Killfeed(commands.Cog):
             "kills": row[0], "deaths": row[1], "kill_scrap": row[2],
             "pending_scrap": row[3], "best_streak": row[4],
             "current_streak": row[5], "first_seen": row[6],
-            "playtime_seconds": row[7],
+            "playtime_seconds": row[7], "playtime_paid_blocks": row[8],
         }
 
     async def _discord_id_for(self, gamertag: str) -> int | None:
@@ -244,6 +307,18 @@ class Killfeed(commands.Cog):
     async def _on_death(self, victim: str, killer: str) -> None:
         """Someone was killed by someone/something."""
         if not victim:
+            return
+        if not _is_player_name(victim):
+            # Entity noise: the feed reports some deaths with a raw
+            # numeric ID instead of a gamertag — never a real player.
+            return
+        if killer and killer.lower() == "environment":
+            # Route to the silent environmental branch below: the death
+            # is recorded, but no card, streak or Scrap (an earlier
+            # version let these fall through to the PvP branch and
+            # 'environment' racked up a fake 100+ kill streak).
+            killer = ""
+        elif killer and not _is_player_name(killer) and not is_npc(killer):
             return
         now = datetime.now(timezone.utc)
         await self._ensure_stats(victim)
@@ -327,7 +402,7 @@ class Killfeed(commands.Cog):
             victim_streak, awarded)
 
     async def _on_suicide(self, victim: str) -> None:
-        if not victim:
+        if not victim or not _is_player_name(victim):
             return
         db = self.bot.economy.db
         await self._ensure_stats(victim)
@@ -349,6 +424,9 @@ class Killfeed(commands.Cog):
         await self._ensure_stats(gamertag)
         self._sessions[gamertag.lower()] = datetime.now(timezone.utc)
 
+    # One payout block = this many seconds of online time.
+    PLAYTIME_BLOCK_SECONDS = 30 * 60
+
     async def _on_leave(self, gamertag: str) -> None:
         if not gamertag:
             return
@@ -360,6 +438,55 @@ class Killfeed(commands.Cog):
                     "UPDATE player_stats SET playtime_seconds = playtime_seconds + ?"
                     " WHERE gamertag = ?", (secs, gamertag))
                 await self.bot.economy.db.commit()
+                await self._pay_playtime_scrap(gamertag)
+
+    async def _pay_playtime_scrap(self, gamertag: str) -> int:
+        """Pay Scrap for completed 30-minute playtime blocks not yet paid.
+
+        Returns the amount actually awarded (0 if none or disabled).
+        Unlinked players bank their Scrap in pending_scrap like kill
+        rewards do — it pays out when they /linkrust.
+        """
+        # Find a guild with playtime rewards enabled to get the amount
+        amount = 50
+        for guild in self.bot.guilds:
+            amount = await self._cfg_int(guild.id, "playtime_scrap", 50)
+            if amount > 0:
+                break
+        if amount <= 0:
+            return 0
+
+        db = self.bot.economy.db
+        stats = await self._get_stats(gamertag)
+        total_blocks = ((stats or {}).get("playtime_seconds", 0)
+                        // self.PLAYTIME_BLOCK_SECONDS)
+        paid_blocks = (stats or {}).get("playtime_paid_blocks", 0)
+        new_blocks = total_blocks - paid_blocks
+        if new_blocks <= 0:
+            return 0
+        payout = new_blocks * amount
+        discord_id = await self._discord_id_for(gamertag)
+        if discord_id:
+            try:
+                await self.bot.economy.add_scrap(discord_id, payout)
+                log.info(f"Killfeed: +{payout} playtime Scrap to {gamertag}"
+                         f" (discord {discord_id})")
+            except Exception as e:
+                log.warning(f"Killfeed: failed to pay playtime for"
+                            f" {gamertag}: {e}")
+                return 0
+        else:
+            # Bank it until they link with /linkrust
+            await db.execute(
+                "UPDATE player_stats SET pending_scrap = pending_scrap + ?"
+                " WHERE gamertag = ?", (payout, gamertag))
+            log.info(f"Killfeed: banked +{payout} playtime Scrap for"
+                     f" unlinked {gamertag}")
+        await db.execute(
+            "UPDATE player_stats SET playtime_paid_blocks = ?"
+            " WHERE gamertag = ?", (total_blocks, gamertag))
+        await db.commit()
+        return payout
 
     async def _award_kill_scrap(self, killer: str, victim: str,
                                 now: datetime) -> int:
