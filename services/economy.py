@@ -22,12 +22,12 @@ WEEK = 7 * DAY
 
 # Weighted daily wheel: (payout, weight). Weights sum to 100.
 # "common" resolves to a random 10-50 payout.
-DAILY_WHEEL_PAYOUTS = [1000, 250, 100, "common"]
+DAILY_WHEEL_PAYOUTS = [500, 450, 400, "common"]
 DAILY_WHEEL_WEIGHTS = [1, 4, 15, 80]  # jackpot ~1%, rare 4%, uncommon 15%
 
 # VIP hourly wheel: its own spin, separate from the daily.
-# "common" resolves to a random 5-20 payout.
-VIP_WHEEL_PAYOUTS = [300, 100, 50, "common"]
+# "common" resolves to a random 100-175 payout.
+VIP_WHEEL_PAYOUTS = [250, 225, 200, "common"]
 VIP_WHEEL_WEIGHTS = [2, 8, 15, 75]  # jackpot ~2%, rare 8%, uncommon 15%
 
 WEEKLY_BASE = 500
@@ -232,13 +232,13 @@ class EconomyService:
 
         pick = random.choices(DAILY_WHEEL_PAYOUTS, weights=DAILY_WHEEL_WEIGHTS, k=1)[0]
         if pick == "common":
-            base, tier = random.randint(10, 50), "common"
-        elif pick == 100:
-            base, tier = 100, "uncommon"
-        elif pick == 250:
-            base, tier = 250, "rare"
+            base, tier = random.randint(200, 350), "common"
+        elif pick == 400:
+            base, tier = 400, "uncommon"
+        elif pick == 450:
+            base, tier = 450, "rare"
         else:
-            base, tier = 1000, "jackpot"
+            base, tier = 500, "jackpot"
 
         bonus_pct = streak_bonus_pct(streak)
         total = base + (base * bonus_pct) // 100
@@ -267,13 +267,13 @@ class EconomyService:
 
         pick = random.choices(VIP_WHEEL_PAYOUTS, weights=VIP_WHEEL_WEIGHTS, k=1)[0]
         if pick == "common":
-            base, tier = random.randint(5, 20), "common"
-        elif pick == 50:
-            base, tier = 50, "uncommon"
-        elif pick == 100:
-            base, tier = 100, "rare"
+            base, tier = random.randint(100, 175), "common"
+        elif pick == 200:
+            base, tier = 200, "uncommon"
+        elif pick == 225:
+            base, tier = 225, "rare"
         else:
-            base, tier = 300, "jackpot"
+            base, tier = 250, "jackpot"
 
         new_balance = balance + base
 
