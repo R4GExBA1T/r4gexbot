@@ -266,6 +266,10 @@ class Killfeed(commands.Cog):
         embed = self._build_kill_embed(killer, victim, kstats,
                                          victim_streak, awarded, now)
         await self._post_killfeed(embed)
+        # And announce it in the game chat itself
+        await self._broadcast_ingame(
+            killer, victim, (kstats or {}).get("current_streak", 0),
+            victim_streak, awarded)
 
     async def _on_suicide(self, victim: str) -> None:
         if not victim:
@@ -406,6 +410,39 @@ class Killfeed(commands.Cog):
                          inline=True)
         em.set_footer(text=f"R4GE 3X — Kill #{kills}")
         return em
+
+    # Milestone streak -> in-game hype line (fires once, at the milestone)
+    _STREAK_HYPE = {
+        3: "is HEATING UP — 3-kill streak!",
+        5: "is on a RAMPAGE — 5-kill streak!",
+        7: "is ON A TEAR — 7-kill streak!",
+        10: "is UNSTOPPABLE — 10-kill streak!",
+    }
+
+    async def _broadcast_ingame(self, killer: str, victim: str, streak: int,
+                                victim_streak: int, awarded: int) -> None:
+        """Announce a PvP kill in the game server's chat via RCON `say`."""
+        try:
+            from services import rcon as rcon_svc
+
+            def safe(name: str) -> str:
+                return name.replace('"', "'").replace("\n", " ").strip()
+
+            line = f"[KILLFEED] {safe(killer)} eliminated {safe(victim)}"
+            if awarded > 0:
+                line += f" (+{awarded} Scrap)"
+            await rcon_svc.send_command(f'say "{line}"')
+
+            hype = self._STREAK_HYPE.get(streak)
+            if hype:
+                await rcon_svc.send_command(
+                    f'say "[KILLFEED] {safe(killer)} {hype}"')
+            if victim_streak >= 3:
+                await rcon_svc.send_command(
+                    f'say "[KILLFEED] {safe(killer)} ended '
+                    f"{safe(victim)}'s {victim_streak}-kill streak!\"")
+        except Exception as e:
+            log.warning(f"Killfeed: in-game broadcast failed: {e}")
 
     async def _post_killfeed(self, embed: discord.Embed) -> None:
         for guild in self.bot.guilds:
