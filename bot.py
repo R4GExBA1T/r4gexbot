@@ -71,6 +71,7 @@ class Ximmy(commands.Bot):
         await self.load_extension("cogs.chatkit")
         await self.load_extension("cogs.killfeed")
         await self.load_extension("cogs.zorp")
+        await self.load_extension("cogs.scrapshop")
         # NOTE: Auto-sync disabled — commands are managed manually via API.
         # The safe auto-sync (copy_global_to + empty-payload guard) works
         # correctly and was used to register /clan on 2026-10-07. It can be
